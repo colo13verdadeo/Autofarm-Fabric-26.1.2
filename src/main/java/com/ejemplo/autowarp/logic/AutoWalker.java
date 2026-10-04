@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 public class AutoWalker {
@@ -31,7 +32,13 @@ public class AutoWalker {
 
     private static final int DURACION_RETROCESO_TICKS = 6;
 
-    /** Callback que se ejecuta al llegar al destino. */
+    /**
+     * Distancia que el jugador avanza por tick al caminar.
+     * Velocidad de caminata ≈ 4.317 bloques/s = 0.2158 bloques/tick.
+     * Añadimos un pequeño margen para simular varios ticks de avance.
+     */
+    private static final double DISTANCIA_SIMULACION = 0.5;
+
     public interface LlegadaCallback {
         void onLlegada(int x, int y, int z);
     }
@@ -167,18 +174,55 @@ public class AutoWalker {
                     return;
                 }
 
+                // Simular avance antes de comprometerse
+                if (!simularAvanceSeguro(client, player)) {
+                    estadoDesvio = 0;
+                    desvioTicks = 0;
+                    retrocesoTicks = DURACION_RETROCESO_TICKS;
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Desvío bloqueado por colisión. Retrocediendo."));
+                    return;
+                }
+
                 client.options.keyUp.setDown(true);
                 client.options.keySprint.setDown(true);
                 return;
             }
         }
 
+        // === CÁLCULO DE DIRECCIÓN HACIA EL OBJETIVO ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
+        // === SIMULACIÓN COMPLETA DEL SIGUIENTE MOVIMIENTO ===
+        // Calculamos la hitbox del jugador si avanzara un tick hacia adelante
+        // y comprobamos si colisiona con algo. Si colisiona, no avanzamos.
+        if (!simularAvanceSeguro(client, player)) {
+            // No podemos avanzar: buscar ruta alternativa
+            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Bloqueado sin ruta alternativa. Deteniendo navegación."));
+                detener(client);
+            }
+            return;
+        }
+
+        // === GESTIÓN DEL SALTO ===
+        if (saltoTicks > 0) {
+            client.options.keyJump.setDown(true);
+            saltoTicks--;
+            if (saltoTicks == 0) {
+                client.options.keyJump.setDown(false);
+            }
+            client.options.keyUp.setDown(true);
+            client.options.keySprint.setDown(true);
+            return;
+        }
+
+        // === COMPROBAR SI NECESITA SALTAR (obstáculo escalable) ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -189,7 +233,9 @@ public class AutoWalker {
                 player.getZ() + forwardZ
         );
         BlockPos cabezaDelante = piesDelante.above();
-        BlockPos sueloDelante = piesDelante.below();
+
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
 
         AABB hitboxDelante = new AABB(
                 piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
@@ -199,18 +245,6 @@ public class AutoWalker {
                 piesDelante.getY() + ALTURA_JUGADOR,
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
-
-        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
-            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Obstrucción en la cabeza sin ruta alternativa. Deteniendo."));
-                detener(client);
-            }
-            return;
-        }
-
-        BlockState estadoPies = client.level.getBlockState(piesDelante);
-        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
 
         if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
             if (esEscalable(client, piesDelante, cabezaDelante)) {
@@ -227,17 +261,8 @@ public class AutoWalker {
             }
         }
 
-        if (saltoTicks > 0) {
-            client.options.keyJump.setDown(true);
-            saltoTicks--;
-            if (saltoTicks == 0) {
-                client.options.keyJump.setDown(false);
-            }
-            client.options.keyUp.setDown(true);
-            client.options.keySprint.setDown(true);
-            return;
-        }
-
+        // === COMPROBAR PRECIPICIO ===
+        BlockPos sueloDelante = piesDelante.below();
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -259,8 +284,104 @@ public class AutoWalker {
             }
         }
 
+        // Todo despejado: avanzar
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
+    }
+
+    // =====================================================
+    // SIMULACIÓN DE MOVIMIENTO
+    // =====================================================
+
+    /**
+     * Simula la hitbox del jugador en la posición que tendría si avanzara
+     * DISTANCIA_SIMULACION bloques hacia adelante. Comprueba:
+     * 1. Que no colisione con ningún bloque sólido (pies y cabeza).
+     * 2. Que haya suelo caminable debajo en la nueva posición.
+     * 3. Que no haya precipicio (caída > CAIDA_MAXIMA).
+     *
+     * Devuelve true si el avance es seguro, false si no.
+     */
+    private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
+        double yawRad = Math.toRadians(player.getYRot());
+
+        // Vector de avance
+        double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
+        double forwardZ = Math.cos(yawRad) * DISTANCIA_SIMULACION;
+
+        // Nueva posición del jugador
+        double nuevaX = player.getX() + forwardX;
+        double nuevaY = player.getY();
+        double nuevaZ = player.getZ() + forwardZ;
+
+        // Hitbox del jugador en la nueva posición (ancho 0.6, alto 1.8)
+        AABB hitboxNueva = new AABB(
+                nuevaX - ANCHO_JUGADOR / 2,
+                nuevaY,
+                nuevaZ - ANCHO_JUGADOR / 2,
+                nuevaX + ANCHO_JUGADOR / 2,
+                nuevaY + ALTURA_JUGADOR,
+                nuevaZ + ANCHO_JUGADOR / 2
+        );
+
+        // === 1. COMPROBAR COLISIÓN CON BLOQUES EN LA NUEVA POSICIÓN ===
+        // Recorremos todos los bloques que la hitbox podría tocar
+        int minX = (int) Math.floor(hitboxNueva.minX);
+        int maxX = (int) Math.floor(hitboxNueva.maxX);
+        int minY = (int) Math.floor(hitboxNueva.minY);
+        int maxY = (int) Math.floor(hitboxNueva.maxY);
+        int minZ = (int) Math.floor(hitboxNueva.minZ);
+        int maxZ = (int) Math.floor(hitboxNueva.maxZ);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    BlockPos bpos = new BlockPos(bx, by, bz);
+                    BlockState estado = client.level.getBlockState(bpos);
+
+                    if (estado.isAir()) continue;
+
+                    // ¿Es pisable? (alfombra, placa, etc.) → no colisiona
+                    if (esBloquePisable(client, bpos, estado)) continue;
+
+                    // ¿Tiene forma de colisión?
+                    VoxelShape forma = estado.getCollisionShape(client.level, bpos);
+                    if (forma.isEmpty()) continue;
+
+                    // Comprobar intersección real
+                    for (AABB cajaBloque : forma.toAabbs()) {
+                        AABB cajaReal = cajaBloque.move(bx, by, bz);
+                        if (cajaReal.intersects(hitboxNueva)) {
+                            // Hay colisión: no es seguro avanzar
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // === 2. COMPROBAR SUELO DEBAJO DE LA NUEVA POSICIÓN ===
+        BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
+        BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
+        boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
+
+        if (!haySuelo) {
+            // Buscar hacia abajo cuántos bloques caería
+            int caida = 0;
+            BlockPos check = sueloNuevo;
+            while (caida <= CAIDA_MAXIMA + 1) {
+                BlockState st = client.level.getBlockState(check);
+                if (esBloqueCaminable(client, check, st)) break;
+                check = check.below();
+                caida++;
+            }
+            if (caida > CAIDA_MAXIMA) {
+                // Precipicio: no es seguro avanzar
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
@@ -349,58 +470,15 @@ public class AutoWalker {
     private boolean esDireccionDesvioSegura(Minecraft client, LocalPlayer player,
                                              float yawObjetivo, int lado) {
         float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * lado));
-        double yawRad = Math.toRadians(yawDesviado);
 
-        double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
-        double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
+        // Guardar yaw actual para restaurarlo
+        float yawOriginal = player.getYRot();
+        player.setYRot(yawDesviado);
 
-        BlockPos piesDelante = BlockPos.containing(
-                player.getX() + forwardX,
-                player.getY(),
-                player.getZ() + forwardZ
-        );
-        BlockPos cabezaDelante = piesDelante.above();
-        BlockPos sueloDelante = piesDelante.below();
+        boolean seguro = simularAvanceSeguro(client, player);
 
-        AABB hitboxDelante = new AABB(
-                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
-                piesDelante.getY(),
-                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
-                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
-                piesDelante.getY() + ALTURA_JUGADOR,
-                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
-        );
-
-        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
-            return false;
-        }
-
-        BlockState estadoPies = client.level.getBlockState(piesDelante);
-        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
-        if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
-            if (!esEscalable(client, piesDelante, cabezaDelante)) {
-                return false;
-            }
-        }
-
-        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
-        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
-
-        if (!haySuelo) {
-            int caida = 0;
-            BlockPos check = sueloDelante;
-            while (caida <= CAIDA_MAXIMA + 1) {
-                BlockState st = client.level.getBlockState(check);
-                if (esBloqueCaminable(client, check, st)) break;
-                check = check.below();
-                caida++;
-            }
-            if (caida > CAIDA_MAXIMA) {
-                return false;
-            }
-        }
-
-        return true;
+        player.setYRot(yawOriginal);
+        return seguro;
     }
 
     private void aplicarRotacionDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
