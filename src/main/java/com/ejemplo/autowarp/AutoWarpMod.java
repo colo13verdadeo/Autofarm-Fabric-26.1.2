@@ -9,6 +9,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
@@ -36,10 +37,14 @@ public class AutoWarpMod implements ClientModInitializer {
                 CATEGORY
         ));
 
+        // === LIMPIAR MARCAS AL CONECTAR ===
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            CoordStorage.limpiarMarcasSesion();
+        });
+
         // === LISTENER DE MENSAJES DE CHAT ===
-        // Detecta el mensaje "Error: You do not have" del servidor
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
-            if (overlay) return; // Ignorar mensajes overlay
+            if (overlay) return;
 
             String texto = message.getString();
             if (texto.contains("Error: You do not have")) {

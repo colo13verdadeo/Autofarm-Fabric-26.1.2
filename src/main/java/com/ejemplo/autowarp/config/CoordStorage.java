@@ -34,6 +34,13 @@ public final class CoordStorage {
     private static Map<String, List<Coordenada>> datos = new HashMap<>();
     private static Coordenada capturaPendiente = null;
 
+    /**
+     * Carteles marcados como "sin stock" en la sesión actual.
+     * Se guardan por su posición (x,y,z) para evitar repetir la interacción.
+     * Se resetean al reiniciar el juego.
+     */
+    private static final Set<String> sinStockSesion = new HashSet<>();
+
     public static class Coordenada {
         public int x, y, z;
         public String itemId;
@@ -51,6 +58,10 @@ public final class CoordStorage {
                 base += " → " + itemId;
             }
             return base;
+        }
+
+        public String getClavePosicion() {
+            return x + "," + y + "," + z;
         }
     }
 
@@ -107,6 +118,25 @@ public final class CoordStorage {
         }
 
         return "desconocido";
+    }
+
+    // =====================================================
+    // MARCAS DE SESIÓN
+    // =====================================================
+
+    /** Marca un cartel como "sin stock" en la sesión actual. */
+    public static void marcarSinStock(Coordenada coord) {
+        sinStockSesion.add(coord.getClavePosicion());
+    }
+
+    /** Comprueba si un cartel está marcado como "sin stock" en la sesión. */
+    public static boolean estaSinStock(Coordenada coord) {
+        return sinStockSesion.contains(coord.getClavePosicion());
+    }
+
+    /** Limpia las marcas de sesión. Se llama al entrar a un mundo/servidor distinto. */
+    public static void limpiarMarcasSesion() {
+        sinStockSesion.clear();
     }
 
     // =====================================================
@@ -203,9 +233,6 @@ public final class CoordStorage {
         return getClaveContextoActual();
     }
 
-    /**
-     * Busca la coordenada registrada más cercana al jugador actual.
-     */
     public static Coordenada getCartelMasCercano() {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) return null;

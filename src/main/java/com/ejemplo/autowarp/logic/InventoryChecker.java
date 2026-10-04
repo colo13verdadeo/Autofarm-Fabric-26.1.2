@@ -29,9 +29,7 @@ public class InventoryChecker {
     private static final int ESPERA_CARGA_CHUNKS_TICKS = 10;
     private static final int ESPERA_CARGA_MAXIMA_TICKS = 100;
 
-    /** Máximo de clics derechos al llegar al destino. */
     private static final int MAX_INTENTOS_CLICK = 30;
-    /** Ticks entre cada clic derecho. */
     private static final int TICKS_ENTRE_CLICKS = 10;
 
     private int contadorTicks = 0;
@@ -50,10 +48,12 @@ public class InventoryChecker {
     private int intentosClick = 0;
     private int ticksDesdeUltimoClick = 0;
 
+    /** Cartel que estamos procesando actualmente (para marcarlo como sin stock). */
+    private CoordStorage.Coordenada cartelActual = null;
+
     private final AutoWalker autoWalker = new AutoWalker();
 
     public InventoryChecker() {
-        // Configurar el callback de llegada del AutoWalker
         autoWalker.setLlegadaCallback(this::onLlegadaAlDestino);
     }
 
@@ -61,7 +61,6 @@ public class InventoryChecker {
         AutoWarpConfig cfg = AutoWarpConfig.get();
         if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) {
             autoWalker.tick(client);
-            // Si estábamos interactuando, seguir procesando la interacción
             if (esperandoMensajeError && client.player != null) {
                 procesarInteraccion(client, client.player);
             }
@@ -74,7 +73,6 @@ public class InventoryChecker {
             return;
         }
 
-        // === PRIORIDAD: interacción con el cartel ===
         if (esperandoMensajeError) {
             procesarInteraccion(client, player);
             return;
@@ -82,7 +80,6 @@ public class InventoryChecker {
 
         autoWalker.tick(client);
 
-        // === FASE 1: espera post-comando ===
         if (esperaPostComandoTicks >= 0) {
             esperaPostComandoTicks--;
             if (esperaPostComandoTicks <= 0) {
@@ -93,7 +90,6 @@ public class InventoryChecker {
             return;
         }
 
-        // === FASE 2: espera de carga de chunks ===
         if (esperaCargaChunksTicks >= 0) {
             esperaCargaChunksTicks--;
             esperaCargaTotalTicks++;
@@ -170,16 +166,36 @@ public class InventoryChecker {
     }
 
     /**
-     * Llamado desde el listener de chat cuando se detecta el mensaje de error.
+     * Llamado desde el listener de chat cuando se detecta "Error: You do not have".
+     * NO es un error: significa que el cartel está vacío. Saltamos al siguiente.
      */
     public void onMensajeErrorDetectado() {
-        if (esperandoMensajeError) {
-            esperandoMensajeError = false;
-            Minecraft client = Minecraft.getInstance();
-            if (client.player != null) {
-                client.player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Mensaje de error detectado. Deteniendo interacción."));
+        if (!esperandoMensajeError) return;
+
+        esperandoMensajeError = false;
+
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client.player;
+
+        if (cartelActual != null) {
+            // Marcar el cartel como sin stock en esta sesión
+            CoordStorage.marcarSinStock(cartelActual);
+            if (player != null) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartelActual + " sin stock. Saltando al siguiente."));
             }
+        }
+
+        cartelActual = null;
+
+        // Detener el AutoWalker si sigue activo (por seguridad)
+        if (autoWalker.estaActivo()) {
+            autoWalker.detener(client);
+        }
+
+        // Buscar el siguiente cartel y navegar hacia él
+        if (player != null) {
+            intentarNavegacion(player);
         }
     }
 
@@ -190,8 +206,15 @@ public class InventoryChecker {
     private void procesarInteraccion(Minecraft client, LocalPlayer player) {
         if (intentosClick >= MAX_INTENTOS_CLICK) {
             player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] No se detectó el mensaje tras " + MAX_INTENTOS_CLICK + " intentos. Deteniendo."));
+                    "[AutoWarp] No se detectó respuesta tras " + MAX_INTENTOS_CLICK + " intentos. Saltando cartel."));
             esperandoMensajeError = false;
+
+            if (cartelActual != null) {
+                CoordStorage.marcarSinStock(cartelActual);
+                cartelActual = null;
+            }
+
+            intentarNavegacion(player);
             return;
         }
 
@@ -202,19 +225,14 @@ public class InventoryChecker {
         ticksDesdeUltimoClick = 0;
         intentosClick++;
 
-        // Apuntar al bloque objetivo
         BlockPos pos = new BlockPos(bloqueObjetivoX, bloqueObjetivoY, bloqueObjetivoZ);
 
-        // Calcular dirección desde los ojos del jugador al centro del bloque
         Vec3 playerEye = player.getEyePosition();
         Vec3 blockCenter = Vec3.atCenterOf(pos);
         Vec3 direction = blockCenter.subtract(playerEye).normalize();
 
-        // ✅ CORREGIDO: getNearest requiere int, int, int (y opcionalmente Direction)
-        // Redondeamos las componentes y determinamos la cara dominante manualmente.
         Direction face = getCaraMasCercana(direction);
 
-        // ✅ CORREGIDO: getNormal() ya no existe. Usamos el desplazamiento manual.
         double offsetX = face.getStepX() * 0.5;
         double offsetY = face.getStepY() * 0.5;
         double offsetZ = face.getStepZ() * 0.5;
@@ -228,10 +246,6 @@ public class InventoryChecker {
         }
     }
 
-    /**
-     * Determina la cara del bloque más cercana al vector de dirección dado.
-     * Equivalente a Direction.getNearest pero sin depender de la API cambiada.
-     */
     private Direction getCaraMasCercana(Vec3 dir) {
         double ax = Math.abs(dir.x);
         double ay = Math.abs(dir.y);
@@ -247,7 +261,7 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // RESTO DE LÓGICA (sin cambios)
+    // RESTO DE LÓGICA
     // =====================================================
 
     private boolean chunksCargados(Minecraft client, LocalPlayer player) {
@@ -319,6 +333,13 @@ public class InventoryChecker {
         CoordStorage.Coordenada elegida = null;
 
         for (CoordStorage.Coordenada cartel : lista) {
+            // Saltar carteles marcados como sin stock en esta sesión
+            if (CoordStorage.estaSinStock(cartel)) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartel + " marcado sin stock. Saltando."));
+                continue;
+            }
+
             double dx = cartel.x - player.getX();
             double dz = cartel.z - player.getZ();
             double distancia = Math.sqrt(dx * dx + dz * dz);
@@ -372,6 +393,8 @@ public class InventoryChecker {
                     "[AutoWarp] Ningún cartel cumple las condiciones para navegar."));
             return;
         }
+
+        cartelActual = elegida;
 
         double dx = elegida.x - player.getX();
         double dz = elegida.z - player.getZ();
