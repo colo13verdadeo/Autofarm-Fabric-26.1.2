@@ -22,21 +22,31 @@ public class AutoWalker {
 
     private static final double ALTURA_JUGADOR = 1.8;
     private static final double ANCHO_JUGADOR = 0.6;
-
-    /** Duración del salto forzado en ticks. */
     private static final int DURACION_SALTO_TICKS = 8;
-
-    /**
-     * Altura mínima de colisión para considerarla un obstáculo real.
-     * Por debajo de este valor, el bloque se pisa sin problema (alfombras,
-     * placas de presión, caminos de tierra, etc.).
-     */
     private static final double ALTURA_PISABLE = 0.5;
+
+    /** Ticks que dura un desvío lateral antes de reintentar. */
+    private static final int DURACION_DESVIO_TICKS = 15;
+
+    /** Máximo de intentos de desvío antes de rendirse. */
+    private static final int MAX_INTENTOS_DESVIO = 6;
+
+    /** Ángulo de desvío respecto a la dirección al objetivo. */
+    private static final float ANGULO_DESVIO = 60.0f;
 
     private boolean activo = false;
     private int targetX, targetY, targetZ;
     private int timeoutTicks = 0;
     private int saltoTicks = 0;
+
+    /** Estado de desvío: 0 = no desviando, 1 = desviando izquierda, -1 = desviando derecha. */
+    private int estadoDesvio = 0;
+    /** Ticks restantes del desvío actual. */
+    private int desvioTicks = 0;
+    /** Número de intentos de desvío realizados. */
+    private int intentosDesvio = 0;
+    /** Última dirección de desvío probada (para alternar). */
+    private int ultimaDireccionDesvio = 1;
 
     public void iniciar(int x, int y, int z) {
         this.activo = true;
@@ -45,12 +55,18 @@ public class AutoWalker {
         this.targetZ = z;
         this.timeoutTicks = 0;
         this.saltoTicks = 0;
+        this.estadoDesvio = 0;
+        this.desvioTicks = 0;
+        this.intentosDesvio = 0;
+        this.ultimaDireccionDesvio = 1;
     }
 
     public void detener(Minecraft client) {
         if (!activo) return;
         this.activo = false;
         this.saltoTicks = 0;
+        this.estadoDesvio = 0;
+        this.desvioTicks = 0;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -98,7 +114,22 @@ public class AutoWalker {
             return;
         }
 
-        // Rotar suavemente hacia el objetivo
+        // === GESTIÓN DEL DESVÍO ACTIVO ===
+        if (estadoDesvio != 0) {
+            desvioTicks--;
+            if (desvioTicks <= 0) {
+                // Terminar desvío, volver a intentar hacia el objetivo
+                estadoDesvio = 0;
+            } else {
+                // Durante el desvío, avanzar en la dirección desviada
+                aplicarRotacionDesvio(client, player, dx, dz);
+                client.options.keyUp.setDown(true);
+                client.options.keySprint.setDown(true);
+                return;
+            }
+        }
+
+        // === CÁLCULO DE DIRECCIÓN HACIA EL OBJETIVO ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
@@ -118,7 +149,6 @@ public class AutoWalker {
         BlockPos cabezaDelante = piesDelante.above();
         BlockPos sueloDelante = piesDelante.below();
 
-        // Hitbox del jugador en la posición delantera
         AABB hitboxDelante = new AABB(
                 piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getY(),
@@ -130,15 +160,15 @@ public class AutoWalker {
 
         // === 1. COLISIÓN A LA ALTURA DE LA CABEZA ===
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Obstrucción a la altura de la cabeza. Deteniendo navegación."));
-            detener(client);
+            if (!iniciarDesvio(client, player)) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Obstrucción en la cabeza sin ruta alternativa. Deteniendo."));
+                detener(client);
+            }
             return;
         }
 
         // === 2. COLISIÓN A LA ALTURA DE LOS PIES ===
-        // Pero antes, comprobar si el bloque delantero es pisable (altura < 0.5).
-        // Si es pisable, ignoramos la colisión y caminamos sobre él.
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
 
@@ -148,9 +178,11 @@ public class AutoWalker {
                     saltoTicks = DURACION_SALTO_TICKS;
                 }
             } else {
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Pared no escalable delante. Deteniendo navegación."));
-                detener(client);
+                if (!iniciarDesvio(client, player)) {
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Pared sin ruta alternativa. Deteniendo navegación."));
+                    detener(client);
+                }
                 return;
             }
         }
@@ -182,10 +214,11 @@ public class AutoWalker {
             }
 
             if (caida > CAIDA_MAXIMA) {
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Precipicio detectado delante (caída de "
-                        + caida + "+ bloques). Deteniendo navegación."));
-                detener(client);
+                if (!iniciarDesvio(client, player)) {
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Precipicio sin ruta alternativa. Deteniendo navegación."));
+                    detener(client);
+                }
                 return;
             }
         }
@@ -196,10 +229,36 @@ public class AutoWalker {
     }
 
     /**
-     * Determina si un bloque es "pisable" (altura de colisión < 0.5).
-     * Alfombras, placas de presión, caminos de tierra, etc.
-     * Estos bloques NO bloquean al jugador y se pueden atravesar caminando.
+     * Inicia un desvío lateral para intentar rodear el obstáculo.
+     * Alterna entre izquierda y derecha. Devuelve false si ya no quedan intentos.
      */
+    private boolean iniciarDesvio(Minecraft client, LocalPlayer player) {
+        if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
+            return false;
+        }
+
+        intentosDesvio++;
+        estadoDesvio = ultimaDireccionDesvio;
+        desvioTicks = DURACION_DESVIO_TICKS;
+        ultimaDireccionDesvio = -ultimaDireccionDesvio;
+
+        return true;
+    }
+
+    /**
+     * Aplica la rotación de desvío durante el avance lateral.
+     */
+    private void aplicarRotacionDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
+        float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+        float yawDesviado = yawObjetivo + (ANGULO_DESVIO * estadoDesvio);
+        yawDesviado = normalizarAngulo(yawDesviado);
+
+        float yawActual = player.getYRot();
+        float diferencia = normalizarAngulo(yawDesviado - yawActual);
+        float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+        player.setYRot(yawActual + paso);
+    }
+
     private boolean esBloquePisable(Minecraft client, BlockPos pos, BlockState estado) {
         if (estado.isAir()) return true;
 
@@ -210,12 +269,7 @@ public class AutoWalker {
         return altura < ALTURA_PISABLE;
     }
 
-    /**
-     * Determina si un obstáculo es escalable (saltable).
-     * Escalables: losas, escaleras no invertidas, bloques con altura entre 0.5 y 1.0.
-     */
     private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
-        // La cabeza debe estar libre
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
         if (!estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
             return false;
