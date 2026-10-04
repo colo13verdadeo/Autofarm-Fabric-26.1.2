@@ -32,12 +32,12 @@ public class AutoWalker {
 
     private static final int DURACION_RETROCESO_TICKS = 6;
 
-    /**
-     * Distancia que el jugador avanza por tick al caminar.
-     * Velocidad de caminata ≈ 4.317 bloques/s = 0.2158 bloques/tick.
-     * Añadimos un pequeño margen para simular varios ticks de avance.
-     */
     private static final double DISTANCIA_SIMULACION = 0.5;
+
+    private static final int MAX_PRUEBAS_FALLIDAS = 11;
+
+    /** Ticks de espera entre pruebas fallidas (0.5 segundos). */
+    private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
 
     public interface LlegadaCallback {
         void onLlegada(int x, int y, int z);
@@ -57,6 +57,11 @@ public class AutoWalker {
 
     private int retrocesoTicks = 0;
 
+    private int pruebasFallidas = 0;
+
+    /** Ticks restantes de espera entre pruebas. 0 = no esperando. */
+    private int esperaEntrePruebasTicks = 0;
+
     public void setLlegadaCallback(LlegadaCallback callback) {
         this.llegadaCallback = callback;
     }
@@ -73,6 +78,8 @@ public class AutoWalker {
         this.intentosDesvio = 0;
         this.ultimaDireccionDesvio = 1;
         this.retrocesoTicks = 0;
+        this.pruebasFallidas = 0;
+        this.esperaEntrePruebasTicks = 0;
     }
 
     public void detener(Minecraft client) {
@@ -82,6 +89,8 @@ public class AutoWalker {
         this.estadoDesvio = 0;
         this.desvioTicks = 0;
         this.retrocesoTicks = 0;
+        this.pruebasFallidas = 0;
+        this.esperaEntrePruebasTicks = 0;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -108,7 +117,9 @@ public class AutoWalker {
         if (client.options.keyLeft.isDown() || client.options.keyRight.isDown()) {
             movimientoManual = true;
         }
-        if (retrocesoTicks == 0 && client.options.keyDown.isDown()) {
+        if (retrocesoTicks == 0
+                && esperaEntrePruebasTicks == 0
+                && client.options.keyDown.isDown()) {
             movimientoManual = true;
         }
 
@@ -140,6 +151,25 @@ public class AutoWalker {
             return;
         }
 
+        // === FASE DE ESPERA ENTRE PRUEBAS (prioridad sobre retroceso y desvío) ===
+        if (esperaEntrePruebasTicks > 0) {
+            esperaEntrePruebasTicks--;
+            // Asegurar que no hay teclas forzadas durante la espera
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(false);
+            client.options.keyJump.setDown(false);
+
+            if (esperaEntrePruebasTicks <= 0) {
+                // Terminada la espera: reintentar desvío desde posición segura
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    registrarPruebaFallida(client, player);
+                }
+            }
+            return;
+        }
+
+        // === FASE DE RETROCESO ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
             client.options.keyUp.setDown(false);
@@ -148,20 +178,19 @@ public class AutoWalker {
 
             if (retrocesoTicks <= 0) {
                 client.options.keyDown.setDown(false);
-                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Sin ruta alternativa tras retroceso. Deteniendo navegación."));
-                    detener(client);
-                }
+                // Tras el retroceso, esperar 0.5 segundos antes de reintentar
+                esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
             }
             return;
         }
 
+        // === GESTIÓN DEL DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
 
             if (desvioTicks <= 0) {
                 estadoDesvio = 0;
+                pruebasFallidas = 0;
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
@@ -174,13 +203,12 @@ public class AutoWalker {
                     return;
                 }
 
-                // Simular avance antes de comprometerse
                 if (!simularAvanceSeguro(client, player)) {
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     retrocesoTicks = DURACION_RETROCESO_TICKS;
                     player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Desvío bloqueado por colisión. Retrocediendo."));
+                            "[AutoWarp] Desvío bloqueado. Retrocediendo."));
                     return;
                 }
 
@@ -197,15 +225,10 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === SIMULACIÓN COMPLETA DEL SIGUIENTE MOVIMIENTO ===
-        // Calculamos la hitbox del jugador si avanzara un tick hacia adelante
-        // y comprobamos si colisiona con algo. Si colisiona, no avanzamos.
+        // === SIMULACIÓN DE AVANCE ===
         if (!simularAvanceSeguro(client, player)) {
-            // No podemos avanzar: buscar ruta alternativa
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Bloqueado sin ruta alternativa. Deteniendo navegación."));
-                detener(client);
+                registrarPruebaFallida(client, player);
             }
             return;
         }
@@ -222,7 +245,7 @@ public class AutoWalker {
             return;
         }
 
-        // === COMPROBAR SI NECESITA SALTAR (obstáculo escalable) ===
+        // === COMPROBAR SI NECESITA SALTAR ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -253,9 +276,7 @@ public class AutoWalker {
                 }
             } else {
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Pared sin ruta alternativa. Deteniendo navegación."));
-                    detener(client);
+                    registrarPruebaFallida(client, player);
                 }
                 return;
             }
@@ -284,37 +305,49 @@ public class AutoWalker {
             }
         }
 
-        // Todo despejado: avanzar
+        // === AVANCE EXITOSO ===
+        pruebasFallidas = 0;
+
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
+    }
+
+    /**
+     * Registra una prueba fallida. Si se alcanzan las MAX_PRUEBAS_FALLIDAS,
+     * detiene la navegación definitivamente. Si no, retrocede para reintentar.
+     */
+    private void registrarPruebaFallida(Minecraft client, LocalPlayer player) {
+        pruebasFallidas++;
+
+        if (pruebasFallidas >= MAX_PRUEBAS_FALLIDAS) {
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] " + MAX_PRUEBAS_FALLIDAS + " pruebas fallidas. No se encontró ruta. Deteniendo navegación."));
+            detener(client);
+            return;
+        }
+
+        player.sendSystemMessage(Component.literal(
+                "[AutoWarp] Prueba fallida " + pruebasFallidas + "/" + MAX_PRUEBAS_FALLIDAS
+                + ". Retrocediendo para reintentar."));
+
+        retrocesoTicks = DURACION_RETROCESO_TICKS;
+        intentosDesvio = 0;
     }
 
     // =====================================================
     // SIMULACIÓN DE MOVIMIENTO
     // =====================================================
 
-    /**
-     * Simula la hitbox del jugador en la posición que tendría si avanzara
-     * DISTANCIA_SIMULACION bloques hacia adelante. Comprueba:
-     * 1. Que no colisione con ningún bloque sólido (pies y cabeza).
-     * 2. Que haya suelo caminable debajo en la nueva posición.
-     * 3. Que no haya precipicio (caída > CAIDA_MAXIMA).
-     *
-     * Devuelve true si el avance es seguro, false si no.
-     */
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
-        // Vector de avance
         double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_SIMULACION;
 
-        // Nueva posición del jugador
         double nuevaX = player.getX() + forwardX;
         double nuevaY = player.getY();
         double nuevaZ = player.getZ() + forwardZ;
 
-        // Hitbox del jugador en la nueva posición (ancho 0.6, alto 1.8)
         AABB hitboxNueva = new AABB(
                 nuevaX - ANCHO_JUGADOR / 2,
                 nuevaY,
@@ -324,8 +357,6 @@ public class AutoWalker {
                 nuevaZ + ANCHO_JUGADOR / 2
         );
 
-        // === 1. COMPROBAR COLISIÓN CON BLOQUES EN LA NUEVA POSICIÓN ===
-        // Recorremos todos los bloques que la hitbox podría tocar
         int minX = (int) Math.floor(hitboxNueva.minX);
         int maxX = (int) Math.floor(hitboxNueva.maxX);
         int minY = (int) Math.floor(hitboxNueva.minY);
@@ -340,19 +371,14 @@ public class AutoWalker {
                     BlockState estado = client.level.getBlockState(bpos);
 
                     if (estado.isAir()) continue;
-
-                    // ¿Es pisable? (alfombra, placa, etc.) → no colisiona
                     if (esBloquePisable(client, bpos, estado)) continue;
 
-                    // ¿Tiene forma de colisión?
                     VoxelShape forma = estado.getCollisionShape(client.level, bpos);
                     if (forma.isEmpty()) continue;
 
-                    // Comprobar intersección real
                     for (AABB cajaBloque : forma.toAabbs()) {
                         AABB cajaReal = cajaBloque.move(bx, by, bz);
                         if (cajaReal.intersects(hitboxNueva)) {
-                            // Hay colisión: no es seguro avanzar
                             return false;
                         }
                     }
@@ -360,13 +386,11 @@ public class AutoWalker {
             }
         }
 
-        // === 2. COMPROBAR SUELO DEBAJO DE LA NUEVA POSICIÓN ===
         BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
         BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
         boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
 
         if (!haySuelo) {
-            // Buscar hacia abajo cuántos bloques caería
             int caida = 0;
             BlockPos check = sueloNuevo;
             while (caida <= CAIDA_MAXIMA + 1) {
@@ -376,7 +400,6 @@ public class AutoWalker {
                 caida++;
             }
             if (caida > CAIDA_MAXIMA) {
-                // Precipicio: no es seguro avanzar
                 return false;
             }
         }
@@ -471,7 +494,6 @@ public class AutoWalker {
                                              float yawObjetivo, int lado) {
         float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * lado));
 
-        // Guardar yaw actual para restaurarlo
         float yawOriginal = player.getYRot();
         player.setYRot(yawDesviado);
 
