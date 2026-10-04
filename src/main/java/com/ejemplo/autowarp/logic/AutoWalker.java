@@ -29,7 +29,6 @@ public class AutoWalker {
     private static final int MAX_INTENTOS_DESVIO = 6;
     private static final float ANGULO_DESVIO = 60.0f;
 
-    /** Ticks que dura el retroceso de seguridad. */
     private static final int DURACION_RETROCESO_TICKS = 6;
 
     private boolean activo = false;
@@ -42,7 +41,6 @@ public class AutoWalker {
     private int intentosDesvio = 0;
     private int ultimaDireccionDesvio = 1;
 
-    /** Ticks restantes de retroceso. 0 = no retrocediendo. */
     private int retrocesoTicks = 0;
 
     public void iniciar(int x, int y, int z) {
@@ -87,9 +85,39 @@ public class AutoWalker {
             return;
         }
 
-        if (client.options.keyDown.isDown()
-                || client.options.keyLeft.isDown()
-                || client.options.keyRight.isDown()) {
+        // === DETECCIÓN DE MOVIMIENTO MANUAL ===
+        // Solo consideramos movimiento manual si el jugador pulsa teclas que
+        // el AutoWalker NO está controlando en este momento.
+        //
+        // El AutoWalker controla:
+        // - keyUp (siempre que avanza o salta)
+        // - keySprint (siempre que avanza)
+        // - keyJump (durante un salto)
+        // - keyDown (durante un retroceso)
+        //
+        // Por tanto, solo es movimiento manual si:
+        // - keyLeft está pulsada (nunca la controlamos)
+        // - keyRight está pulsada (nunca la controlamos)
+        // - keyDown está pulsada PERO no estamos retrocediendo
+        // - keyUp está pulsada PERO no estamos avanzando por nuestra cuenta
+        //
+        // Para simplificar: comprobamos Left y Right siempre.
+        // Y comprobamos Down solo si retrocesoTicks == 0.
+        // Y comprobamos Up solo si no estamos en medio de un avance automático.
+        // Como el avance automático siempre fuerza keyUp a true, no podemos
+        // distinguirlo de un jugador pulsando W. Por eso solo miramos Left/Right,
+        // y Down si no estamos retrocediendo.
+
+        boolean movimientoManual = false;
+
+        if (client.options.keyLeft.isDown() || client.options.keyRight.isDown()) {
+            movimientoManual = true;
+        }
+        if (retrocesoTicks == 0 && client.options.keyDown.isDown()) {
+            movimientoManual = true;
+        }
+
+        if (movimientoManual) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Movimiento manual detectado. Cancelando navegación."));
             detener(client);
@@ -116,14 +144,18 @@ public class AutoWalker {
         // === FASE DE RETROCESO (prioridad máxima) ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
-            // Retroceder: soltar avance y pulsar S (keyDown)
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyDown.setDown(true);
 
-            // Si el retroceso termina, soltar S y continuar
             if (retrocesoTicks <= 0) {
                 client.options.keyDown.setDown(false);
+                // Tras el retroceso, intentar desvío seguro
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Sin ruta alternativa tras retroceso. Deteniendo navegación."));
+                    detener(client);
+                }
             }
             return;
         }
@@ -138,7 +170,6 @@ public class AutoWalker {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
                 if (!esDireccionSegura(client, player)) {
-                    // El desvío nos lleva a un peligro: abortar y retroceder
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     retrocesoTicks = DURACION_RETROCESO_TICKS;
@@ -238,13 +269,9 @@ public class AutoWalker {
             }
 
             if (caida > CAIDA_MAXIMA) {
-                // PELIGRO: primero retroceder medio bloque para asegurar posición
                 retrocesoTicks = DURACION_RETROCESO_TICKS;
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Precipicio detectado. Retrocediendo para buscar ruta."));
-
-                // Tras el retroceso, intentar desvío. Programamos un intento diferido.
-                // Para simplificar, dejamos el desvío para el siguiente ciclo tras el retroceso.
                 return;
             }
         }
@@ -252,18 +279,6 @@ public class AutoWalker {
         // Todo despejado: avanzar
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
-    }
-
-    /**
-     * Al terminar el retroceso, intenta iniciar un desvío seguro.
-     * Este método se llama desde tick() cuando retrocesoTicks llega a 0.
-     */
-    private void trasRetroceso(Minecraft client, LocalPlayer player, double dx, double dz) {
-        if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Sin ruta alternativa tras retroceso. Deteniendo navegación."));
-            detener(client);
-        }
     }
 
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
