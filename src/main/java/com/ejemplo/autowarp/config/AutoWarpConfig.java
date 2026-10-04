@@ -24,8 +24,14 @@ public final class AutoWarpConfig {
     public int segundosCooldown = 120;
     public boolean mostrarMensajesOverlay = true;
 
-    /** Comando que se ejecuta cuando no quedan carteles disponibles. */
     public String comandoPostCarteles = "visit kfcblock";
+
+    /**
+     * Si está activado, el AutoWalker aplica protección contra precipicios
+     * y obstáculos no escalables. Si está desactivado, navega directo
+     * rodeando obstáculos pero puede caer por precipicios.
+     */
+    public boolean zonaSegura = true;
 
     private static AutoWarpConfig INSTANCE = new AutoWarpConfig();
 

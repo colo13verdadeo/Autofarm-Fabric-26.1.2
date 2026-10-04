@@ -1,5 +1,6 @@
 package com.ejemplo.autowarp.logic;
 
+import com.ejemplo.autowarp.config.AutoWarpConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -37,11 +38,6 @@ public class AutoWalker {
 
     private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
 
-    /**
-     * Ángulos de exploración lateral en grados respecto a la dirección al objetivo.
-     * Se prueban en orden: primero los más suaves, luego los más pronunciados.
-     * Cubre hasta 150° en cada lado para permitir rodear obstáculos grandes.
-     */
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
     };
@@ -57,12 +53,17 @@ public class AutoWalker {
     private int timeoutTicks = 0;
     private int saltoTicks = 0;
 
+    /**
+     * Ticks durante los cuales se ignora la comprobación de suelo.
+     * Se activa al iniciar un salto y dura hasta que el jugador toca suelo de nuevo.
+     */
+    private int ticksIgnorandoSuelo = 0;
+
     private int estadoDesvio = 0;
     private int desvioTicks = 0;
     private int intentosDesvio = 0;
     private int ultimaDireccionDesvio = 1;
 
-    /** Ángulo actual del desvío en curso. */
     private float anguloDesvioActual = 0f;
 
     private int retrocesoTicks = 0;
@@ -82,6 +83,7 @@ public class AutoWalker {
         this.targetZ = z;
         this.timeoutTicks = 0;
         this.saltoTicks = 0;
+        this.ticksIgnorandoSuelo = 0;
         this.estadoDesvio = 0;
         this.desvioTicks = 0;
         this.intentosDesvio = 0;
@@ -96,6 +98,7 @@ public class AutoWalker {
         if (!activo) return;
         this.activo = false;
         this.saltoTicks = 0;
+        this.ticksIgnorandoSuelo = 0;
         this.estadoDesvio = 0;
         this.desvioTicks = 0;
         this.retrocesoTicks = 0;
@@ -121,6 +124,11 @@ public class AutoWalker {
         if (player == null || client.level == null) {
             detener(client);
             return;
+        }
+
+        // Reducir contador de "ignorar suelo" si está activo
+        if (ticksIgnorandoSuelo > 0) {
+            ticksIgnorandoSuelo--;
         }
 
         boolean movimientoManual = false;
@@ -251,6 +259,8 @@ public class AutoWalker {
             if (saltoTicks == 0) {
                 client.options.keyJump.setDown(false);
             }
+            // Mientras saltamos, ignorar la comprobación de suelo durante unos ticks
+            ticksIgnorandoSuelo = Math.max(ticksIgnorandoSuelo, DURACION_SALTO_TICKS);
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
             return;
@@ -284,6 +294,7 @@ public class AutoWalker {
             if (esEscalable(client, piesDelante, cabezaDelante)) {
                 if (saltoTicks == 0) {
                     saltoTicks = DURACION_SALTO_TICKS;
+                    ticksIgnorandoSuelo = DURACION_SALTO_TICKS;
                 }
             } else {
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
@@ -293,26 +304,31 @@ public class AutoWalker {
             }
         }
 
-        // === PRECIPICIO ===
-        BlockPos sueloDelante = piesDelante.below();
-        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
-        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
+        // === PRECIPICIO (solo si zona segura está activada) ===
+        AutoWarpConfig cfg = AutoWarpConfig.get();
+        boolean zonaSegura = cfg == null || cfg.zonaSegura;
 
-        if (!haySuelo) {
-            int caida = 0;
-            BlockPos check = sueloDelante;
-            while (caida <= CAIDA_MAXIMA + 1) {
-                BlockState st = client.level.getBlockState(check);
-                if (esBloqueCaminable(client, check, st)) break;
-                check = check.below();
-                caida++;
-            }
+        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+            BlockPos sueloDelante = piesDelante.below();
+            BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
+            boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
-            if (caida > CAIDA_MAXIMA) {
-                retrocesoTicks = DURACION_RETROCESO_TICKS;
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Precipicio detectado. Retrocediendo para buscar ruta."));
-                return;
+            if (!haySuelo) {
+                int caida = 0;
+                BlockPos check = sueloDelante;
+                while (caida <= CAIDA_MAXIMA + 1) {
+                    BlockState st = client.level.getBlockState(check);
+                    if (esBloqueCaminable(client, check, st)) break;
+                    check = check.below();
+                    caida++;
+                }
+
+                if (caida > CAIDA_MAXIMA) {
+                    retrocesoTicks = DURACION_RETROCESO_TICKS;
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Precipicio detectado. Retrocediendo para buscar ruta."));
+                    return;
+                }
             }
         }
 
@@ -344,6 +360,9 @@ public class AutoWalker {
     // =====================================================
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
+        AutoWarpConfig cfg = AutoWarpConfig.get();
+        boolean zonaSegura = cfg == null || cfg.zonaSegura;
+
         double yawRad = Math.toRadians(player.getYRot());
 
         double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
@@ -391,21 +410,25 @@ public class AutoWalker {
             }
         }
 
-        BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
-        BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
-        boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
+        // === COMPROBAR SUELO ===
+        // Solo si zona segura está activa Y no estamos en medio de un salto
+        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+            BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
+            BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
+            boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
 
-        if (!haySuelo) {
-            int caida = 0;
-            BlockPos check = sueloNuevo;
-            while (caida <= CAIDA_MAXIMA + 1) {
-                BlockState st = client.level.getBlockState(check);
-                if (esBloqueCaminable(client, check, st)) break;
-                check = check.below();
-                caida++;
-            }
-            if (caida > CAIDA_MAXIMA) {
-                return false;
+            if (!haySuelo) {
+                int caida = 0;
+                BlockPos check = sueloNuevo;
+                while (caida <= CAIDA_MAXIMA + 1) {
+                    BlockState st = client.level.getBlockState(check);
+                    if (esBloqueCaminable(client, check, st)) break;
+                    check = check.below();
+                    caida++;
+                }
+                if (caida > CAIDA_MAXIMA) {
+                    return false;
+                }
             }
         }
 
@@ -413,6 +436,9 @@ public class AutoWalker {
     }
 
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
+        AutoWarpConfig cfg = AutoWarpConfig.get();
+        boolean zonaSegura = cfg == null || cfg.zonaSegura;
+
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -446,30 +472,28 @@ public class AutoWalker {
             }
         }
 
-        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
-        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
+        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+            BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
+            boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
-        if (!haySuelo) {
-            int caida = 0;
-            BlockPos check = sueloDelante;
-            while (caida <= CAIDA_MAXIMA + 1) {
-                BlockState st = client.level.getBlockState(check);
-                if (esBloqueCaminable(client, check, st)) break;
-                check = check.below();
-                caida++;
-            }
-            if (caida > CAIDA_MAXIMA) {
-                return false;
+            if (!haySuelo) {
+                int caida = 0;
+                BlockPos check = sueloDelante;
+                while (caida <= CAIDA_MAXIMA + 1) {
+                    BlockState st = client.level.getBlockState(check);
+                    if (esBloqueCaminable(client, check, st)) break;
+                    check = check.below();
+                    caida++;
+                }
+                if (caida > CAIDA_MAXIMA) {
+                    return false;
+                }
             }
         }
 
         return true;
     }
 
-    /**
-     * Explora múltiples ángulos a ambos lados hasta encontrar uno seguro.
-     * Prioriza los ángulos suaves primero. Alterna el lado inicial.
-     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
             return false;
@@ -480,7 +504,6 @@ public class AutoWalker {
         int ladoPrimero = ultimaDireccionDesvio;
         int ladoSegundo = -ultimaDireccionDesvio;
 
-        // Probar primero el lado alternado, luego el otro
         if (probarAngulosEnLado(client, player, yawObjetivo, ladoPrimero)) {
             return true;
         }
@@ -491,10 +514,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Prueba todos los ángulos de exploración en un lado concreto.
-     * Si encuentra uno seguro, inicia el desvío.
-     */
     private boolean probarAngulosEnLado(Minecraft client, LocalPlayer player,
                                           float yawObjetivo, int lado) {
         for (float angulo : ANGULOS_EXPLORACION) {
@@ -511,9 +530,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Comprueba si la dirección indicada por yawDesviado es segura.
-     */
     private boolean esDireccionSeguraParaYaw(Minecraft client, LocalPlayer player, float yawDesviado) {
         float yawOriginal = player.getYRot();
         player.setYRot(yawDesviado);
@@ -584,7 +600,7 @@ public class AutoWalker {
         return false;
     }
 
-    private boolean esBloqueCaminable(Minecraft client, BlockPos pos, BlockState estado) {
+    private boolean esBlaoqueCaminable(Minecraft client, BlockPos pos, BlockState estado) {
         if (estado.isAir()) return false;
 
         if (estado.is(BlockTags.SLABS)) return true;

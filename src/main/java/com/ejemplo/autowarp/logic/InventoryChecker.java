@@ -144,10 +144,6 @@ public class InventoryChecker {
         }
     }
 
-    // =====================================================
-    // CALLBACK DE LLEGADA
-    // =====================================================
-
     private void onLlegadaAlDestino(int x, int y, int z) {
         this.esperandoMensajeError = true;
         this.bloqueObjetivoX = x;
@@ -163,10 +159,6 @@ public class InventoryChecker {
         }
     }
 
-    /**
-     * Llamado desde el listener de chat cuando se detecta "Error: You do not have".
-     * NO es un error: el cartel está vacío. Saltamos al siguiente.
-     */
     public void onMensajeErrorDetectado() {
         if (!esperandoMensajeError) return;
 
@@ -193,10 +185,6 @@ public class InventoryChecker {
             intentarNavegacion(player);
         }
     }
-
-    // =====================================================
-    // INTERACCIÓN
-    // =====================================================
 
     private void procesarInteraccion(Minecraft client, LocalPlayer player) {
         if (intentosClick >= MAX_INTENTOS_CLICK) {
@@ -254,10 +242,6 @@ public class InventoryChecker {
         }
         return dir.z > 0 ? Direction.SOUTH : Direction.NORTH;
     }
-
-    // =====================================================
-    // RESTO
-    // =====================================================
 
     private boolean chunksCargados(Minecraft client, LocalPlayer player) {
         if (client.level == null) return false;
@@ -318,9 +302,6 @@ public class InventoryChecker {
         }
     }
 
-    /**
-     * Ejecuta el comando post-carteles cuando no quedan carteles disponibles.
-     */
     private void ejecutarComandoPostCarteles(Minecraft client, LocalPlayer player) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
         if (cfg == null) return;
@@ -334,6 +315,13 @@ public class InventoryChecker {
             client.getConnection().sendCommand(cmd);
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] No quedan carteles. Ejecutando: /" + cmd));
+
+            // === REINICIAR MARCAS DE SIN STOCK ===
+            // Tras ejecutar el comando post-carteles, los carteles vuelven
+            // a estar disponibles para la siguiente vuelta.
+            CoordStorage.limpiarMarcasSesion();
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Carteles reiniciados. Disponibles para la siguiente vuelta."));
         }
     }
 

@@ -101,6 +101,17 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
+        // === NUEVO: Zona segura ===
+        y += 25;
+        this.addRenderableWidget(Button.builder(
+                Component.literal("Zona segura: " + (cfg.zonaSegura ? "SÍ" : "NO")),
+                btn -> {
+                    cfg.zonaSegura = !cfg.zonaSegura;
+                    AutoWarpConfig.save();
+                    btn.setMessage(Component.literal("Zona segura: " + (cfg.zonaSegura ? "SÍ" : "NO")));
+                }
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
+
         // Comando principal
         y += 30;
         labelComandoY = y;
@@ -137,7 +148,7 @@ public class AutoWarpScreen extends Screen {
         });
         this.addRenderableWidget(this.comandoPostBox);
 
-        // Columna derecha: carteles
+        // Columna derecha
         int rightX = centerX + 10;
 
         this.addRenderableWidget(Button.builder(
@@ -171,7 +182,6 @@ public class AutoWarpScreen extends Screen {
 
         int leftX = this.width / 2 - 240 - 10;
 
-        // Etiquetas de los comandos
         graphics.text(this.font,
                 "Comando principal:",
                 leftX, labelComandoY,
@@ -182,7 +192,6 @@ public class AutoWarpScreen extends Screen {
                 leftX, labelComandoPostY,
                 0xFFAAAAAA, true);
 
-        // Lista de carteles
         String contexto = CoordStorage.getNombreContextoActual();
         graphics.text(this.font,
                 "Carteles en: " + contexto,
