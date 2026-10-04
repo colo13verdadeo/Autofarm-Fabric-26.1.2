@@ -15,7 +15,7 @@ import java.util.List;
 
 public class AutoWarpScreen extends Screen {
 
-    private static final int ROWS = 6;
+    private static final int ROWS = 5;
     private static final int ROW_HEIGHT = 22;
 
     private final List<CoordStorage.Coordenada> coordsMostradas = new ArrayList<>();
@@ -35,9 +35,14 @@ public class AutoWarpScreen extends Screen {
         int centerX = this.width / 2;
         int buttonWidth = 240;
         int buttonHeight = 20;
-        int y = 35;
 
-        // --- Fila 1: Mod on/off ---
+        // =====================================================
+        // COLUMNA IZQUIERDA: Opciones de configuración
+        // =====================================================
+        int leftX = centerX - buttonWidth - 10;
+        int y = 40;
+
+        // Mod on/off
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mod: " + (cfg.modActivado ? "ACTIVADO" : "DESACTIVADO")),
                 btn -> {
@@ -45,20 +50,20 @@ public class AutoWarpScreen extends Screen {
                     AutoWarpConfig.save();
                     btn.setMessage(Component.literal("Mod: " + (cfg.modActivado ? "ACTIVADO" : "DESACTIVADO")));
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Fila 2: Checkeo de inventario lleno on/off ---
+        // Checkeo inventario lleno on/off
         y += 25;
         this.addRenderableWidget(Button.builder(
-                Component.literal("Chequeo inventario lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")),
+                Component.literal("Chequeo lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")),
                 btn -> {
                     cfg.checkeoActivo = !cfg.checkeoActivo;
                     AutoWarpConfig.save();
-                    btn.setMessage(Component.literal("Chequeo inventario lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")));
+                    btn.setMessage(Component.literal("Chequeo lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")));
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Fila 3: Segundos inventario lleno ---
+        // Segundos inventario lleno
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Segundos lleno: " + cfg.segundosInventarioLleno + "s"),
@@ -67,14 +72,13 @@ public class AutoWarpScreen extends Screen {
                     AutoWarpConfig.save();
                     btn.setMessage(Component.literal("Segundos lleno: " + cfg.segundosInventarioLleno + "s"));
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Fila 4: Cooldown en segundos ---
+        // Cooldown en segundos
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Cooldown: " + cfg.segundosCooldown + "s"),
                 btn -> {
-                    // Ciclar por valores útiles: 30, 60, 90, 120, 180, 300, 600
                     int[] valores = {30, 60, 90, 120, 180, 300, 600};
                     int siguiente = valores[0];
                     for (int i = 0; i < valores.length; i++) {
@@ -87,9 +91,9 @@ public class AutoWarpScreen extends Screen {
                     AutoWarpConfig.save();
                     btn.setMessage(Component.literal("Cooldown: " + cfg.segundosCooldown + "s"));
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Fila 5: Mensajes overlay ---
+        // Mensajes overlay
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mensajes T1/T2/T3: " + (cfg.mostrarMensajesOverlay ? "SÍ" : "NO")),
@@ -98,14 +102,17 @@ public class AutoWarpScreen extends Screen {
                     AutoWarpConfig.save();
                     btn.setMessage(Component.literal("Mensajes T1/T2/T3: " + (cfg.mostrarMensajesOverlay ? "SÍ" : "NO")));
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Fila 6: EditBox para el comando ---
+        // --- Etiqueta + EditBox del comando ---
         y += 30;
+        // Etiqueta dibujada en extractRenderState en "y - 12"
+        int labelY = y;
+
         this.comandoBox = new EditBox(
                 this.font,
-                centerX - buttonWidth / 2,
-                y,
+                leftX,
+                labelY + 12,
                 buttonWidth,
                 buttonHeight,
                 Component.literal("Comando")
@@ -118,20 +125,27 @@ public class AutoWarpScreen extends Screen {
         });
         this.addRenderableWidget(this.comandoBox);
 
-        // Etiqueta del comando
-        // (se dibuja en extractRenderState)
+        // Guardar la Y de la etiqueta para dibujarla
+        this.labelComandoY = labelY;
 
-        // --- Botón: Añadir cartel ---
-        y += 30;
+        // =====================================================
+        // COLUMNA DERECHA: Carteles
+        // =====================================================
+        int rightX = centerX + 10;
+
+        // Botón: Añadir cartel
         this.addRenderableWidget(Button.builder(
                 Component.literal("Añadir cartel que estoy mirando"),
                 btn -> {
-                    CoordStorage.intentarCapturarCartel();
-                    refrescarLista();
+                    if (CoordStorage.prepararCapturaCartel()) {
+                        Minecraft.getInstance().setScreen(new ItemSearchScreen());
+                    }
                 }
-        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+        ).bounds(rightX, 40, buttonWidth, buttonHeight).build());
 
-        // --- Botón volver ---
+        // =====================================================
+        // Botón volver (centrado abajo)
+        // =====================================================
         this.addRenderableWidget(Button.builder(
                 Component.literal("Volver"),
                 btn -> Minecraft.getInstance().setScreen(null)
@@ -139,6 +153,8 @@ public class AutoWarpScreen extends Screen {
 
         refrescarLista();
     }
+
+    private int labelComandoY = 0;
 
     private void refrescarLista() {
         coordsMostradas.clear();
@@ -152,30 +168,30 @@ public class AutoWarpScreen extends Screen {
 
         graphics.centeredText(this.font, this.title, this.width / 2, 15, 0xFFFFFFFF);
 
-        // Etiqueta del comando
+        // Etiqueta del comando (dibujada 12px arriba del EditBox)
         graphics.text(this.font,
                 "Comando a ejecutar:",
-                this.width / 2 - 120, 175,
+                this.width / 2 - 240 - 10, labelComandoY,
                 0xFFAAAAAA, true);
 
-        // Título de la lista de coordenadas
+        // Título de la lista de carteles
         String contexto = CoordStorage.getNombreContextoActual();
         graphics.text(this.font,
                 "Carteles en: " + contexto,
-                this.width / 2 - 100, this.height - 140,
+                this.width / 2 + 10, 70,
                 0xFFAAAAAA, true);
 
-        int startX = this.width / 2 - 100;
-        int startY = this.height - 120;
+        int startX = this.width / 2 + 10;
+        int startY = 85;
         int end = Math.min(scrollOffset + ROWS, coordsMostradas.size());
 
         for (int i = scrollOffset; i < end; i++) {
             CoordStorage.Coordenada c = coordsMostradas.get(i);
             int rowY = startY + (i - scrollOffset) * ROW_HEIGHT;
 
-            graphics.fill(startX - 2, rowY - 2, startX + 202, rowY + 18, 0x40000000);
+            graphics.fill(startX - 2, rowY - 2, startX + 242, rowY + 18, 0x40000000);
             graphics.text(this.font, c.toString(), startX + 5, rowY + 5, 0xFFFFFFFF, true);
-            graphics.text(this.font, "[X]", startX + 175, rowY + 5, 0xFFFF5555, true);
+            graphics.text(this.font, "[X]", startX + 220, rowY + 5, 0xFFFF5555, true);
         }
 
         if (coordsMostradas.isEmpty()) {
@@ -188,10 +204,10 @@ public class AutoWarpScreen extends Screen {
         double mouseX = event.x();
         double mouseY = event.y();
 
-        int startX = this.width / 2 - 100;
-        int startY = this.height - 120;
+        int startX = this.width / 2 + 10;
+        int startY = 85;
 
-        if (mouseX >= startX + 170 && mouseX <= startX + 205) {
+        if (mouseX >= startX + 215 && mouseX <= startX + 245) {
             for (int i = scrollOffset; i < Math.min(scrollOffset + ROWS, coordsMostradas.size()); i++) {
                 int rowY = startY + (i - scrollOffset) * ROW_HEIGHT;
                 if (mouseY >= rowY - 2 && mouseY <= rowY + 18) {

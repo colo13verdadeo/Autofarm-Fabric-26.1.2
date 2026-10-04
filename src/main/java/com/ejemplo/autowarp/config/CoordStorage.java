@@ -7,7 +7,11 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -31,8 +35,13 @@ public final class CoordStorage {
     /** clave (mundo/servidor) -> lista de coordenadas */
     private static Map<String, List<Coordenada>> datos = new HashMap<>();
 
+    /** Coordenada pendiente de asignar ítem (captura en curso). */
+    private static Coordenada capturaPendiente = null;
+
     public static class Coordenada {
         public int x, y, z;
+        /** ID del ítem asociado (puede ser null). */
+        public String itemId;
 
         public Coordenada() {}
 
@@ -42,7 +51,11 @@ public final class CoordStorage {
 
         @Override
         public String toString() {
-            return "(" + x + ", " + y + ", " + z + ")";
+            String base = "(" + x + ", " + y + ", " + z + ")";
+            if (itemId != null && !itemId.isEmpty()) {
+                base += " → " + itemId;
+            }
+            return base;
         }
     }
 
@@ -95,7 +108,6 @@ public final class CoordStorage {
         }
 
         if (client.level != null) {
-            // ✅ CORREGIDO: identifier() en lugar de location() en 26.1
             return "world:" + client.level.dimension().identifier();
         }
 
@@ -103,14 +115,16 @@ public final class CoordStorage {
     }
 
     // =====================================================
-    // CAPTURA DE CARTEL
+    // CAPTURA DE CARTEL (en dos pasos)
     // =====================================================
 
-    public static boolean intentarCapturarCartel() {
+    /**
+     * Paso 1: verifica que el bloque mirado sea un cartel y guarda la coordenada
+     * como captura pendiente. Devuelve true si hay que abrir la pantalla de búsqueda.
+     */
+    public static boolean prepararCapturaCartel() {
         Minecraft client = Minecraft.getInstance();
-        if (client.player == null || client.level == null) {
-            return false;
-        }
+        if (client.player == null || client.level == null) return false;
 
         HitResult hit = client.hitResult;
         if (hit == null || hit.getType() != HitResult.Type.BLOCK) {
@@ -129,25 +143,55 @@ public final class CoordStorage {
             return false;
         }
 
-        String clave = getClaveContextoActual();
-        Coordenada coord = new Coordenada(pos.getX(), pos.getY(), pos.getZ());
+        capturaPendiente = new Coordenada(pos.getX(), pos.getY(), pos.getZ());
+        return true;
+    }
 
+    /**
+     * Paso 2: asigna el ítem seleccionado a la captura pendiente y la guarda.
+     */
+    public static void confirmarCapturaConItem(Item item) {
+        if (capturaPendiente == null) return;
+
+        if (item != null) {
+            Identifier id = BuiltInRegistries.ITEM.getKey(item);
+            if (id != null) {
+                capturaPendiente.itemId = id.toString();
+            }
+        }
+
+        String clave = getClaveContextoActual();
         datos.computeIfAbsent(clave, k -> new ArrayList<>());
 
         boolean existe = datos.get(clave).stream()
-                .anyMatch(c -> c.x == coord.x && c.y == coord.y && c.z == coord.z);
+                .anyMatch(c -> c.x == capturaPendiente.x
+                        && c.y == capturaPendiente.y
+                        && c.z == capturaPendiente.z);
 
+        Minecraft client = Minecraft.getInstance();
         if (existe) {
-            client.player.sendSystemMessage(
-                    Component.literal("[AutoWarp] Ese cartel ya está registrado."));
-            return false;
+            if (client.player != null) {
+                client.player.sendSystemMessage(
+                        Component.literal("[AutoWarp] Ese cartel ya está registrado."));
+            }
+        } else {
+            datos.get(clave).add(capturaPendiente);
+            guardar();
+            if (client.player != null) {
+                client.player.sendSystemMessage(
+                        Component.literal("[AutoWarp] Cartel añadido: " + capturaPendiente));
+            }
         }
 
-        datos.get(clave).add(coord);
-        guardar();
-        client.player.sendSystemMessage(
-                Component.literal("[AutoWarp] Cartel añadido: " + coord));
-        return true;
+        capturaPendiente = null;
+    }
+
+    public static void cancelarCaptura() {
+        capturaPendiente = null;
+    }
+
+    public static boolean hayCapturaPendiente() {
+        return capturaPendiente != null;
     }
 
     // =====================================================
