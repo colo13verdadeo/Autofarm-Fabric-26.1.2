@@ -24,13 +24,11 @@ public class InventoryChecker {
     private boolean enviandoComando = false;
     private int cooldownTicks = 0;
 
-    // AutoWalker para la navegación posterior
     private final AutoWalker autoWalker = new AutoWalker();
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
         if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) {
-            // Aun si el mod está desactivado, seguir procesando el auto-walk si está activo
             autoWalker.tick(client);
             return;
         }
@@ -41,7 +39,6 @@ public class InventoryChecker {
             return;
         }
 
-        // AutoWalker siempre se procesa
         autoWalker.tick(client);
 
         if (cooldownTicks > 0) {
@@ -117,8 +114,6 @@ public class InventoryChecker {
                 }
             }
             cooldownTicks = cfg.segundosCooldown * TICKS_POR_SEGUNDO;
-
-            // Tras el comando, intentar navegar al cartel más cercano
             intentarNavegacion(player);
         } catch (Exception e) {
             // Silenciar errores
@@ -128,19 +123,13 @@ public class InventoryChecker {
         }
     }
 
-    // =====================================================
-    // LÓGICA DE NAVEGACIÓN
-    // =====================================================
-
     private void intentarNavegacion(LocalPlayer player) {
         CoordStorage.Coordenada cartel = CoordStorage.getCartelMasCercano();
 
         if (cartel == null) {
-            // No hay carteles guardados en este contexto
             return;
         }
 
-        // 1. Verificar distancia
         double dx = cartel.x - player.getX();
         double dz = cartel.z - player.getZ();
         double distancia = Math.sqrt(dx * dx + dz * dz);
@@ -152,7 +141,6 @@ public class InventoryChecker {
             return;
         }
 
-        // 2. Verificar item asociado
         if (cartel.itemId == null || cartel.itemId.isEmpty()) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] El cartel no tiene un item asociado. No se navegará."));
@@ -166,14 +154,17 @@ public class InventoryChecker {
             return;
         }
 
-        Item itemObjetivo = BuiltInRegistries.ITEM.get(id);
+        // ✅ CORREGIDO: get() devuelve Optional<Reference<Item>> en 26.1
+        Item itemObjetivo = BuiltInRegistries.ITEM.get(id)
+                .map(ref -> ref.value())
+                .orElse(null);
+
         if (itemObjetivo == null) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] El item del cartel no existe en el registro: " + cartel.itemId));
             return;
         }
 
-        // 3. Verificar que hay al menos 1 stack completo del item en el inventario
         int cantidad = contarItem(player, itemObjetivo);
         if (cantidad < 64) {
             player.sendSystemMessage(Component.literal(
@@ -182,20 +173,12 @@ public class InventoryChecker {
             return;
         }
 
-        // 4. Verificar contexto (mundo/servidor)
-        // Ya está implícito: getCartelMasCercano() solo devuelve carteles del contexto actual.
-        // Si no hay carteles en este contexto, ya habría retornado arriba.
-
-        // Todo OK: iniciar navegación
         player.sendSystemMessage(Component.literal(
                 "[AutoWarp] Navegando hacia el cartel " + cartel + " ("
                 + (int) distancia + " bloques)."));
         autoWalker.iniciar(cartel.x, cartel.y, cartel.z);
     }
 
-    /**
-     * Cuenta cuántos items del tipo indicado tiene el jugador en el inventario.
-     */
     private int contarItem(LocalPlayer player, Item item) {
         Inventory inv = player.getInventory();
         int total = 0;
