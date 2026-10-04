@@ -46,6 +46,18 @@ public class AutoWalker {
 
     private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
 
+    /**
+     * Diferencia máxima de rotación para considerar que el jugador está
+     * alineado con el objetivo y puede avanzar.
+     */
+    private static final float UMBRAL_ALINEACION_AVANCE = 10.0f;
+
+    /**
+     * Diferencia máxima de rotación para considerar que el jugador está
+     * alineado con la dirección de desvío.
+     */
+    private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
+
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
     };
@@ -183,6 +195,7 @@ public class AutoWalker {
             return;
         }
 
+        // === MODO SIN ZONA SEGURA: rotar y avanzar sin proyección ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
@@ -203,6 +216,7 @@ public class AutoWalker {
             return;
         }
 
+        // === ESPERA ENTRE PRUEBAS ===
         if (esperaEntrePruebasTicks > 0) {
             esperaEntrePruebasTicks--;
             client.options.keyUp.setDown(false);
@@ -218,6 +232,7 @@ public class AutoWalker {
             return;
         }
 
+        // === RETROCESO ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
             client.options.keyUp.setDown(false);
@@ -231,6 +246,7 @@ public class AutoWalker {
             return;
         }
 
+        // === DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
 
@@ -241,6 +257,19 @@ public class AutoWalker {
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
+                // Comprobar si la rotación ya está alineada con la dirección de desvío
+                float yawObjetivoBase = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+                float yawObjetivoDesvio = normalizarAngulo(yawObjetivoBase + (anguloDesvioActual * estadoDesvio));
+                float diferenciaRotacion = Math.abs(normalizarAngulo(yawObjetivoDesvio - player.getYRot()));
+
+                if (diferenciaRotacion > UMBRAL_ALINEACION_DESVIO) {
+                    // Aún rotando: no avanzar todavía
+                    client.options.keyUp.setDown(false);
+                    client.options.keySprint.setDown(false);
+                    return;
+                }
+
+                // Rotación alineada: comprobar seguridad desde la posición actual
                 if (!esDireccionSegura(client, player)) {
                     debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot())
                             + " EstadoDesvio=" + estadoDesvio
@@ -279,11 +308,20 @@ public class AutoWalker {
             }
         }
 
+        // === AVANCE NORMAL HACIA EL OBJETIVO ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
+
+        // Si la rotación aún no está alineada, solo rotar sin avanzar.
+        float diferenciaRestante = Math.abs(normalizarAngulo(yawObjetivo - player.getYRot()));
+        if (diferenciaRestante > UMBRAL_ALINEACION_AVANCE) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            return;
+        }
 
         if (!simularAvanceSeguro(client, player)) {
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
@@ -296,6 +334,7 @@ public class AutoWalker {
             return;
         }
 
+        // === SALTO ===
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
@@ -308,6 +347,7 @@ public class AutoWalker {
             return;
         }
 
+        // === COMPROBAR SI NECESITA SALTAR ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -345,6 +385,7 @@ public class AutoWalker {
             }
         }
 
+        // === PRECIPICIO ===
         if (ticksIgnorandoSuelo == 0) {
             BlockPos sueloDelante = piesDelante.below();
             BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
