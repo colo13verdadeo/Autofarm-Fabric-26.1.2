@@ -16,7 +16,6 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
-import org.lwjgl.glfw.GLFW;
 
 import java.util.List;
 
@@ -32,9 +31,6 @@ public class InventoryChecker {
 
     private static final int MAX_INTENTOS_CLICK = 30;
     private static final int TICKS_ENTRE_CLICKS = 10;
-
-    /** Ticks que se mantiene pulsada la tecla K al llegar a autofarm. */
-    private static final int DURACION_TECLA_K_TICKS = 10;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -53,13 +49,11 @@ public class InventoryChecker {
 
     private CoordStorage.Coordenada cartelActual = null;
 
-    /** AutoWalker para navegación de carteles. */
     private final AutoWalker autoWalker = new AutoWalker();
-    /** AutoWalker independiente para ir a la ubicación de autofarm. */
     private final AutoWalker autoWalkerAutofarm = new AutoWalker();
 
-    /** Ticks restantes para mantener la tecla K pulsada. */
-    private int teclaKTicks = 0;
+    /** Flag para saber si tras la espera post-comando hay que ir a autofarm. */
+    private boolean irAAutofarmTrasEspera = false;
 
     public InventoryChecker() {
         autoWalker.setLlegadaCallback(this::onLlegadaAlDestino);
@@ -71,7 +65,6 @@ public class InventoryChecker {
         if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) {
             autoWalker.tick(client);
             autoWalkerAutofarm.tick(client);
-            procesarTeclaK(client);
             if (esperandoMensajeError && client.player != null) {
                 procesarInteraccion(client, client.player);
             }
@@ -89,12 +82,12 @@ public class InventoryChecker {
             return;
         }
 
-        // Ambos AutoWalkers se procesan siempre
+        // Configurar zona segura independiente por AutoWalker
         autoWalker.setZonaSegura(cfg.zonaSeguraCarteles);
         autoWalkerAutofarm.setZonaSegura(cfg.zonaSeguraPostCarteles);
+
         autoWalker.tick(client);
         autoWalkerAutofarm.tick(client);
-        procesarTeclaK(client);
 
         if (esperaPostComandoTicks >= 0) {
             esperaPostComandoTicks--;
@@ -163,29 +156,6 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // TECLA K
-    // =====================================================
-
-    private void procesarTeclaK(Minecraft client) {
-        if (teclaKTicks > 0) {
-            teclaKTicks--;
-            // Forzar la tecla K pulsada
-            // En 26.1 se puede simular mediante InputConstants
-            // Pero la forma más simple es usar KeyMapping si existe.
-            // Como K no es una KeyMapping vanilla, usamos el teclado directamente.
-            if (client.getWindow() != null) {
-                // Enviar la tecla K al manejador de input
-                long handle = client.getWindow().getWindow();
-                // Simular pulsación
-                // Nota: esto requiere acceso al KeyboardHandler
-            }
-            if (teclaKTicks == 0) {
-                // Soltar la tecla
-            }
-        }
-    }
-
-    // =====================================================
     // CALLBACKS
     // =====================================================
 
@@ -214,11 +184,8 @@ public class InventoryChecker {
                 client.player.setYRot(cfg.autofarmYaw);
             }
             client.player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Autofarm alcanzado. Pulsando tecla K."));
+                    "[AutoWarp] Autofarm alcanzado. Navegación finalizada."));
         }
-
-        // Iniciar pulsación de tecla K
-        teclaKTicks = DURACION_TECLA_K_TICKS;
     }
 
     public void onMensajeErrorDetectado() {
@@ -390,26 +357,21 @@ public class InventoryChecker {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Carteles reiniciados. Disponibles para la siguiente vuelta."));
 
-            // === AUTOFARM ===
+            // Si autofarm está activado, preparar navegación a la ubicación capturada
             if (cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Autofarm activado. Navegando a la ubicación capturada."));
-                // Esperar un poco para que el comando se procese antes de navegar
-                esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
-                // Marcar un flag para que al terminar la espera se navegue a autofarm
                 irAAutofarmTrasEspera = true;
+                esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
             }
         }
     }
-
-    /** Flag para saber si tras la espera post-comando hay que ir a autofarm. */
-    private boolean irAAutofarmTrasEspera = false;
 
     private void intentarNavegacion(LocalPlayer player) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
 
         // Si venimos de ejecutar el comando post-carteles y hay autofarm activo,
-        // navegar a la ubicación de autofarm en lugar de buscar carteles.
+        // navegar a la ubicación de autofarm.
         if (irAAutofarmTrasEspera) {
             irAAutofarmTrasEspera = false;
 
