@@ -6,11 +6,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.phys.AABB;
-import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 public class AutoWalker {
@@ -67,10 +67,6 @@ public class AutoWalker {
 
     private int esperaEntrePruebasTicks = 0;
 
-    /**
-     * Zona segura específica de esta instancia de AutoWalker.
-     * Cada instancia (carteles o post-carteles) tiene su propio valor.
-     */
     private boolean zonaSegura = true;
 
     public void setLlegadaCallback(LlegadaCallback callback) {
@@ -347,6 +343,10 @@ public class AutoWalker {
         intentosDesvio = 0;
     }
 
+    // =====================================================
+    // SIMULACIÓN
+    // =====================================================
+
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -381,6 +381,8 @@ public class AutoWalker {
 
                     if (estado.isAir()) continue;
                     if (esBloquePisable(client, bpos, estado)) continue;
+                    // Excluir carteles y bloques no sólidos
+                    if (esBloqueNoSolido(estado)) continue;
 
                     VoxelShape forma = estado.getCollisionShape(client.level, bpos);
                     if (forma.isEmpty()) continue;
@@ -540,6 +542,25 @@ public class AutoWalker {
         return altura < ALTURA_PISABLE;
     }
 
+    /**
+     * Determina si un bloque es no sólido (no debe considerarse obstrucción).
+     * Carteles, pancartas, antorchas y otros bloques decorativos.
+     */
+    private boolean esBloqueNoSolido(BlockState estado) {
+        // Carteles (de pie y de pared)
+        if (estado.getBlock() instanceof SignBlock) return true;
+        // Pancartas
+        if (estado.is(BlockTags.BANNERS)) return true;
+        // Carteles colgantes
+        if (estado.is(BlockTags.ALL_SIGNS)) return true;
+        // Vallas (fence gates): no bloquean si están abiertas
+        if (estado.is(BlockTags.FENCE_GATES)) return true;
+        // Velas
+        if (estado.is(BlockTags.CANDLES)) return true;
+        if (estado.is(BlockTags.CANDLE_CAKES)) return true;
+        return false;
+    }
+
     private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
         if (!estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
@@ -566,6 +587,9 @@ public class AutoWalker {
         BlockState estado = client.level.getBlockState(pos);
 
         if (estado.isAir()) return false;
+
+        // Excluir bloques no sólidos
+        if (esBloqueNoSolido(estado)) return false;
 
         VoxelShape forma = estado.getCollisionShape(client.level, pos);
         if (forma.isEmpty()) return false;
