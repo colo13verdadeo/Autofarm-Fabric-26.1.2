@@ -7,8 +7,9 @@ import com.ejemplo.autowarp.screen.AutoWarpScreen;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 public class AutoWarpMod implements ClientModInitializer {
@@ -18,22 +19,27 @@ public class AutoWarpMod implements ClientModInitializer {
 
     private static KeyMapping abrirConfigKey;
 
+    // Categoría de tecla (objeto, no String, desde 1.21.9)
+    private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(
+            Identifier.fromNamespaceAndPath(MOD_ID, "autowarp")
+    );
+
     @Override
     public void onInitializeClient() {
         // Cargar configuración y coordenadas
         AutoWarpConfig.load();
         CoordStorage.cargar();
 
-        // Tecla para abrir la pantalla (por defecto: K)
-        abrirConfigKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+        // Tecla para abrir la pantalla: "-"
+        abrirConfigKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.autowarp.abrir_config",
                 InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_K,
-                "category.autowarp"
+                GLFW.GLFW_KEY_MINUS,
+                CATEGORY
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // Abrir pantalla con la tecla
+            // Abrir pantalla con la tecla "-"
             while (abrirConfigKey.consumeClick()) {
                 if (client.screen == null) {
                     AutoWarpScreen.open();
