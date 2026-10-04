@@ -12,6 +12,8 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
+import java.util.List;
+
 public class InventoryChecker {
 
     private static final int TICKS_POR_SEGUNDO = 20;
@@ -52,7 +54,6 @@ public class InventoryChecker {
             esperaPostComandoTicks--;
             if (esperaPostComandoTicks <= 0) {
                 esperaPostComandoTicks = -1;
-                // Ya pasó 1 segundo: calcular y navegar con la posición actualizada
                 intentarNavegacion(player);
             }
             return;
@@ -131,10 +132,6 @@ public class InventoryChecker {
                 }
             }
             cooldownTicks = cfg.segundosCooldown * TICKS_POR_SEGUNDO;
-
-            // En lugar de navegar inmediatamente, activar la espera de 1 segundo.
-            // La navegación se calculará cuando termine la espera, con la
-            // posición ya actualizada por el servidor tras el warp.
             esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
         } catch (Exception e) {
             // Silenciar errores
@@ -144,60 +141,88 @@ public class InventoryChecker {
         }
     }
 
+    /**
+     * Recorre TODAS las coordenadas del contexto actual.
+     * Se salta las que no cumplen condiciones (distancia, item, stack)
+     * y continúa con la siguiente. Solo navega a la primera que cumpla todo.
+     */
     private void intentarNavegacion(LocalPlayer player) {
-        CoordStorage.Coordenada cartel = CoordStorage.getCartelMasCercano();
+        List<CoordStorage.Coordenada> lista = CoordStorage.getCoordenadasActuales();
 
-        if (cartel == null) {
+        if (lista.isEmpty()) {
             return;
         }
 
-        // Aquí la posición del jugador ya está actualizada tras el warp.
-        double dx = cartel.x - player.getX();
-        double dz = cartel.z - player.getZ();
+        CoordStorage.Coordenada elegida = null;
+
+        for (CoordStorage.Coordenada cartel : lista) {
+            // 1. Verificar distancia
+            double dx = cartel.x - player.getX();
+            double dz = cartel.z - player.getZ();
+            double distancia = Math.sqrt(dx * dx + dz * dz);
+
+            if (distancia > DISTANCIA_MAXIMA) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartel + " a " + (int) distancia +
+                        " bloques (máximo " + (int) DISTANCIA_MAXIMA + "). Saltando."));
+                continue;
+            }
+
+            // 2. Verificar item asociado
+            if (cartel.itemId == null || cartel.itemId.isEmpty()) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartel + " sin item asociado. Saltando."));
+                continue;
+            }
+
+            Identifier id = Identifier.tryParse(cartel.itemId);
+            if (id == null) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartel + " con ID de item inválido: "
+                        + cartel.itemId + ". Saltando."));
+                continue;
+            }
+
+            Item itemObjetivo = BuiltInRegistries.ITEM.get(id)
+                    .map(ref -> ref.value())
+                    .orElse(null);
+
+            if (itemObjetivo == null) {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Cartel " + cartel + " con item inexistente: "
+                        + cartel.itemId + ". Saltando."));
+                continue;
+            }
+
+            // 3. Verificar stack completo del item
+            int cantidad = contarItem(player, itemObjetivo);
+            if (cantidad < 64) {
+                player.sendSystemMessage(Component.literal(
+                        "El siguiente item no hay un stack de el: " + cartel.itemId
+                        + " (tienes " + cantidad + "/64). Saltando cartel " + cartel + "."));
+                continue;
+            }
+
+            // Todo OK: este es el elegido
+            elegida = cartel;
+            break;
+        }
+
+        if (elegida == null) {
+            // Ninguna coordenada cumplió las condiciones
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Ningún cartel cumple las condiciones para navegar."));
+            return;
+        }
+
+        double dx = elegida.x - player.getX();
+        double dz = elegida.z - player.getZ();
         double distancia = Math.sqrt(dx * dx + dz * dz);
 
-        if (distancia > DISTANCIA_MAXIMA) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] El cartel más cercano está a " + (int) distancia +
-                    " bloques (máximo " + (int) DISTANCIA_MAXIMA + "). No se navegará."));
-            return;
-        }
-
-        if (cartel.itemId == null || cartel.itemId.isEmpty()) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] El cartel no tiene un item asociado. No se navegará."));
-            return;
-        }
-
-        Identifier id = Identifier.tryParse(cartel.itemId);
-        if (id == null) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] El ID del item del cartel es inválido: " + cartel.itemId));
-            return;
-        }
-
-        Item itemObjetivo = BuiltInRegistries.ITEM.get(id)
-                .map(ref -> ref.value())
-                .orElse(null);
-
-        if (itemObjetivo == null) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] El item del cartel no existe en el registro: " + cartel.itemId));
-            return;
-        }
-
-        int cantidad = contarItem(player, itemObjetivo);
-        if (cantidad < 64) {
-            player.sendSystemMessage(Component.literal(
-                    "El siguiente item no hay un stack de el: " + cartel.itemId
-                    + " (tienes " + cantidad + "/64)"));
-            return;
-        }
-
         player.sendSystemMessage(Component.literal(
-                "[AutoWarp] Navegando hacia el cartel " + cartel + " ("
+                "[AutoWarp] Navegando hacia el cartel " + elegida + " ("
                 + (int) distancia + " bloques)."));
-        autoWalker.iniciar(cartel.x, cartel.y, cartel.z);
+        autoWalker.iniciar(elegida.x, elegida.y, elegida.z);
     }
 
     private int contarItem(LocalPlayer player, Item item) {
