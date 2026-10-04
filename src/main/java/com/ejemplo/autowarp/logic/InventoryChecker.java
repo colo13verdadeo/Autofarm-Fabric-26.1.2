@@ -52,7 +52,6 @@ public class InventoryChecker {
     private final AutoWalker autoWalker = new AutoWalker();
     private final AutoWalker autoWalkerAutofarm = new AutoWalker();
 
-    /** Flag para saber si tras la espera post-comando hay que ir a autofarm. */
     private boolean irAAutofarmTrasEspera = false;
 
     public InventoryChecker() {
@@ -82,7 +81,6 @@ public class InventoryChecker {
             return;
         }
 
-        // Configurar zona segura independiente por AutoWalker
         autoWalker.setZonaSegura(cfg.zonaSeguraCarteles);
         autoWalkerAutofarm.setZonaSegura(cfg.zonaSeguraPostCarteles);
 
@@ -155,10 +153,6 @@ public class InventoryChecker {
         }
     }
 
-    // =====================================================
-    // CALLBACKS
-    // =====================================================
-
     private void onLlegadaAlDestino(int x, int y, int z) {
         this.esperandoMensajeError = true;
         this.bloqueObjetivoX = x;
@@ -179,7 +173,6 @@ public class InventoryChecker {
         AutoWarpConfig cfg = AutoWarpConfig.get();
 
         if (client.player != null) {
-            // Fijar la rotación capturada
             if (cfg != null && cfg.autofarmCapturado) {
                 client.player.setYRot(cfg.autofarmYaw);
             }
@@ -214,10 +207,6 @@ public class InventoryChecker {
             intentarNavegacion(player);
         }
     }
-
-    // =====================================================
-    // INTERACCIÓN
-    // =====================================================
 
     private void procesarInteraccion(Minecraft client, LocalPlayer player) {
         if (intentosClick >= MAX_INTENTOS_CLICK) {
@@ -275,10 +264,6 @@ public class InventoryChecker {
         }
         return dir.z > 0 ? Direction.SOUTH : Direction.NORTH;
     }
-
-    // =====================================================
-    // RESTO
-    // =====================================================
 
     private boolean chunksCargados(Minecraft client, LocalPlayer player) {
         if (client.level == null) return false;
@@ -357,7 +342,6 @@ public class InventoryChecker {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Carteles reiniciados. Disponibles para la siguiente vuelta."));
 
-            // Si autofarm está activado, preparar navegación a la ubicación capturada
             if (cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Autofarm activado. Navegando a la ubicación capturada."));
@@ -370,8 +354,6 @@ public class InventoryChecker {
     private void intentarNavegacion(LocalPlayer player) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
 
-        // Si venimos de ejecutar el comando post-carteles y hay autofarm activo,
-        // navegar a la ubicación de autofarm.
         if (irAAutofarmTrasEspera) {
             irAAutofarmTrasEspera = false;
 
@@ -380,9 +362,9 @@ public class InventoryChecker {
                         "[AutoWarp] Navegando a la ubicación de autofarm ("
                         + (int) cfg.autofarmX + ", " + (int) cfg.autofarmY + ", " + (int) cfg.autofarmZ + ")."));
                 autoWalkerAutofarm.iniciar(
-                        (int) Math.floor(cfg.autofarmX),
-                        (int) Math.floor(cfg.autofarmY),
-                        (int) Math.floor(cfg.autofarmZ)
+                        (int) Math.round(cfg.autofarmX),
+                        (int) Math.round(cfg.autofarmY),
+                        (int) Math.round(cfg.autofarmZ)
                 );
                 return;
             }

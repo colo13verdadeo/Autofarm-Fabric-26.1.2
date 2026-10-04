@@ -16,7 +16,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 public class AutoWalker {
 
-    private static final double DISTANCIA_LLEGADA = 2.0;
+    private static final double DISTANCIA_LLEGADA = 0.8;
     private static final double VELOCIDAD_ROTACION = 15.0;
     private static final int TIMEOUT_MAX = 20 * 120;
     private static final double DISTANCIA_MIRA = 1.5;
@@ -265,12 +265,14 @@ public class AutoWalker {
 
         // === SIMULACIÓN DE AVANCE ===
         if (!simularAvanceSeguro(client, player)) {
-            // Si es un pasillo estrecho, no desviar: registrar prueba fallida
-            if (!hayHuecoSuficiente(client, player)) {
-                registrarPruebaFallida(client, player);
-                return;
-            }
+            // Primero intentar desviar (todos los ángulos disponibles).
+            // Solo si ningún desvío funciona, comprobar si es pasillo estrecho
+            // (que se informa al usuario, pero igualmente registra fallo).
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                if (!hayHuecoSuficiente(client, player)) {
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Pasillo estrecho detectado. No se puede pasar."));
+                }
                 registrarPruebaFallida(client, player);
             }
             return;
@@ -376,11 +378,6 @@ public class AutoWalker {
     // SIMULACIÓN
     // =====================================================
 
-    /**
-     * Simula el avance del jugador. NO comprueba el hueco lateral aquí:
-     * esa comprobación se hace solo cuando la simulación falla (en tick),
-     * para no romper situaciones como caminar sobre losas con escalones.
-     */
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -453,10 +450,6 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Comprueba si el hueco lateral es suficiente. Mide a varias alturas y
-     * devuelve true si en AL MENOS UNA hay espacio suficiente.
-     */
     private boolean hayHuecoSuficiente(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -490,10 +483,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Busca la distancia hasta el primer bloque sólido en la dirección lateral dada,
-     * a una altura concreta.
-     */
     private double buscarBloqueLateral(Minecraft client, double centerX, double centerZ,
                                         double y, double dirX, double dirZ) {
         double maxBusqueda = 1.5;
