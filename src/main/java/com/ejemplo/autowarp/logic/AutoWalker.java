@@ -27,7 +27,6 @@ public class AutoWalker {
     private static final int DURACION_SALTO_TICKS = 8;
     private static final double ALTURA_PISABLE = 0.5;
 
-    /** Margen lateral de seguridad para detectar pasillos estrechos (vallas, etc.). */
     private static final double MARGEN_LATERAL = 0.15;
 
     private static final int DURACION_DESVIO_TICKS = 15;
@@ -174,7 +173,6 @@ public class AutoWalker {
             return;
         }
 
-        // === MODO SIN ZONA SEGURA: avance directo ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
@@ -195,7 +193,6 @@ public class AutoWalker {
             return;
         }
 
-        // === MODO CON ZONA SEGURA ===
         if (esperaEntrePruebasTicks > 0) {
             esperaEntrePruebasTicks--;
             client.options.keyUp.setDown(false);
@@ -266,7 +263,13 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
+        // === SIMULACIÓN DE AVANCE ===
         if (!simularAvanceSeguro(client, player)) {
+            // Si es un pasillo estrecho, no desviar: registrar prueba fallida
+            if (!hayHuecoSuficiente(client, player)) {
+                registrarPruebaFallida(client, player);
+                return;
+            }
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 registrarPruebaFallida(client, player);
             }
@@ -373,12 +376,12 @@ public class AutoWalker {
     // SIMULACIÓN
     // =====================================================
 
+    /**
+     * Simula el avance del jugador. NO comprueba el hueco lateral aquí:
+     * esa comprobación se hace solo cuando la simulación falla (en tick),
+     * para no romper situaciones como caminar sobre losas con escalones.
+     */
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
-        // === NUEVO: COMPROBAR HUECO LATERAL PRIMERO ===
-        if (!hayHuecoSuficiente(client, player)) {
-            return false;
-        }
-
         double yawRad = Math.toRadians(player.getYRot());
 
         double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
@@ -451,11 +454,8 @@ public class AutoWalker {
     }
 
     /**
-     * Comprueba si el hueco lateral en la dirección de avance es suficiente
-     * para que el jugador pase. Detecta pasillos estrechos formados por
-     * bloques sólidos a los costados (vallas, muros, etc.).
-     *
-     * Devuelve true si hay al menos ANCHO_JUGADOR + MARGEN_LATERAL de espacio libre.
+     * Comprueba si el hueco lateral es suficiente. Mide a varias alturas y
+     * devuelve true si en AL MENOS UNA hay espacio suficiente.
      */
     private boolean hayHuecoSuficiente(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
@@ -469,24 +469,33 @@ public class AutoWalker {
         double distanciaComprobacion = DISTANCIA_SIMULACION;
         double centerX = player.getX() + forwardX * distanciaComprobacion;
         double centerZ = player.getZ() + forwardZ * distanciaComprobacion;
-        double playerY = player.getY();
 
-        double huecoIzquierda = buscarBloqueLateral(client, centerX, centerZ, playerY,
-                -lateralX, -lateralZ);
-        double huecoDerecha = buscarBloqueLateral(client, centerX, centerZ, playerY,
-                lateralX, lateralZ);
+        double[] alturas = {0.0, 0.5, 1.0, 1.5};
 
-        double huecoTotal = huecoIzquierda + huecoDerecha;
+        for (double alturaRelativa : alturas) {
+            double y = player.getY() + alturaRelativa;
 
-        return huecoTotal >= ANCHO_JUGADOR + MARGEN_LATERAL;
+            double huecoIzquierda = buscarBloqueLateral(client, centerX, centerZ, y,
+                    -lateralX, -lateralZ);
+            double huecoDerecha = buscarBloqueLateral(client, centerX, centerZ, y,
+                    lateralX, lateralZ);
+
+            double huecoTotal = huecoIzquierda + huecoDerecha;
+
+            if (huecoTotal >= ANCHO_JUGADOR + MARGEN_LATERAL) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Busca la distancia hasta el primer bloque sólido en la dirección lateral dada.
-     * Devuelve la distancia máxima de búsqueda si no encuentra nada.
+     * Busca la distancia hasta el primer bloque sólido en la dirección lateral dada,
+     * a una altura concreta.
      */
     private double buscarBloqueLateral(Minecraft client, double centerX, double centerZ,
-                                        double centerY, double dirX, double dirZ) {
+                                        double y, double dirX, double dirZ) {
         double maxBusqueda = 1.5;
         double paso = 0.1;
 
@@ -494,22 +503,20 @@ public class AutoWalker {
             double x = centerX + dirX * d;
             double z = centerZ + dirZ * d;
 
-            for (double dy = 0; dy < ALTURA_JUGADOR; dy += 0.5) {
-                BlockPos pos = BlockPos.containing(x, centerY + dy, z);
-                BlockState estado = client.level.getBlockState(pos);
+            BlockPos pos = BlockPos.containing(x, y, z);
+            BlockState estado = client.level.getBlockState(pos);
 
-                if (estado.isAir()) continue;
-                if (esBloqueNoSolido(estado)) continue;
-                if (esBloquePisable(client, pos, estado)) continue;
+            if (estado.isAir()) continue;
+            if (esBloqueNoSolido(estado)) continue;
+            if (esBloquePisable(client, pos, estado)) continue;
 
-                VoxelShape forma = estado.getCollisionShape(client.level, pos);
-                if (forma.isEmpty()) continue;
+            VoxelShape forma = estado.getCollisionShape(client.level, pos);
+            if (forma.isEmpty()) continue;
 
-                AABB cajaBloque = forma.bounds().move(pos.getX(), pos.getY(), pos.getZ());
-                if (cajaBloque.minX <= x && cajaBloque.maxX >= x
-                        && cajaBloque.minZ <= z && cajaBloque.maxZ >= z) {
-                    return d;
-                }
+            AABB cajaBloque = forma.bounds().move(pos.getX(), pos.getY(), pos.getZ());
+            if (cajaBloque.minX <= x && cajaBloque.maxX >= x
+                    && cajaBloque.minZ <= z && cajaBloque.maxZ >= z) {
+                return d;
             }
         }
 
