@@ -4,8 +4,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.StairBlock;
@@ -46,17 +49,11 @@ public class AutoWalker {
 
     private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
 
-    /**
-     * Diferencia máxima de rotación para considerar que el jugador está
-     * alineado con el objetivo y puede avanzar.
-     */
     private static final float UMBRAL_ALINEACION_AVANCE = 10.0f;
-
-    /**
-     * Diferencia máxima de rotación para considerar que el jugador está
-     * alineado con la dirección de desvío.
-     */
     private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
+
+    /** Umbral de velocidad para considerar que el jugador está quieto. */
+    private static final double UMBRAL_VELOCIDAD_QUIETO = 0.05;
 
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
@@ -88,6 +85,9 @@ public class AutoWalker {
 
     private int esperaEntrePruebasTicks = 0;
 
+    /** Contador de ticks esperando a que el jugador se detenga. */
+    private int esperaQuieto = 0;
+
     private boolean zonaSegura = true;
 
     private void debug(String mensaje) {
@@ -118,6 +118,7 @@ public class AutoWalker {
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
+        this.esperaQuieto = 0;
     }
 
     public void detener(Minecraft client) {
@@ -130,6 +131,7 @@ public class AutoWalker {
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
+        this.esperaQuieto = 0;
         this.anguloDesvioActual = 0f;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
@@ -141,6 +143,18 @@ public class AutoWalker {
 
     public boolean estaActivo() {
         return activo;
+    }
+
+    /**
+     * Comprueba si el jugador está prácticamente quieto.
+     * Se usa antes de hacer simulaciones para asegurar que la posición
+     * no cambia entre la comprobación y el avance.
+     */
+    private boolean jugadorQuieto(LocalPlayer player) {
+        double vx = player.getX() - player.xOld;
+        double vz = player.getZ() - player.zOld;
+        double velocidad = Math.sqrt(vx * vx + vz * vz);
+        return velocidad < UMBRAL_VELOCIDAD_QUIETO;
     }
 
     public void tick(Minecraft client) {
@@ -195,7 +209,7 @@ public class AutoWalker {
             return;
         }
 
-        // === MODO SIN ZONA SEGURA: rotar y avanzar sin proyección ===
+        // === MODO SIN ZONA SEGURA ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
@@ -246,6 +260,18 @@ public class AutoWalker {
             return;
         }
 
+        // === ESPERA A QUE EL JUGADOR SE DETENGA ===
+        if (!jugadorQuieto(player)) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            esperaQuieto++;
+            if (esperaQuieto > 20) {
+                esperaQuieto = 0;
+            }
+            return;
+        }
+        esperaQuieto = 0;
+
         // === DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
@@ -257,19 +283,16 @@ public class AutoWalker {
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
-                // Comprobar si la rotación ya está alineada con la dirección de desvío
                 float yawObjetivoBase = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
                 float yawObjetivoDesvio = normalizarAngulo(yawObjetivoBase + (anguloDesvioActual * estadoDesvio));
                 float diferenciaRotacion = Math.abs(normalizarAngulo(yawObjetivoDesvio - player.getYRot()));
 
                 if (diferenciaRotacion > UMBRAL_ALINEACION_DESVIO) {
-                    // Aún rotando: no avanzar todavía
                     client.options.keyUp.setDown(false);
                     client.options.keySprint.setDown(false);
                     return;
                 }
 
-                // Rotación alineada: comprobar seguridad desde la posición actual
                 if (!esDireccionSegura(client, player)) {
                     debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot())
                             + " EstadoDesvio=" + estadoDesvio
@@ -315,7 +338,6 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // Si la rotación aún no está alineada, solo rotar sin avanzar.
         float diferenciaRestante = Math.abs(normalizarAngulo(yawObjetivo - player.getYRot()));
         if (diferenciaRestante > UMBRAL_ALINEACION_AVANCE) {
             client.options.keyUp.setDown(false);
@@ -334,7 +356,6 @@ public class AutoWalker {
             return;
         }
 
-        // === SALTO ===
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
@@ -347,7 +368,6 @@ public class AutoWalker {
             return;
         }
 
-        // === COMPROBAR SI NECESITA SALTAR ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -385,7 +405,6 @@ public class AutoWalker {
             }
         }
 
-        // === PRECIPICIO ===
         if (ticksIgnorandoSuelo == 0) {
             BlockPos sueloDelante = piesDelante.below();
             BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
@@ -433,10 +452,6 @@ public class AutoWalker {
         intentosDesvio = 0;
     }
 
-    // =====================================================
-    // SIMULACIÓN
-    // =====================================================
-
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -465,12 +480,14 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitboxIntermedia)) {
+                String bloque = describirBloqueQueColisiona(client, hitboxIntermedia);
                 debug("simularAvanceSeguro FALSA: colisión en muestra " + i + "/"
                         + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
                         + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
                         + " Pos=(" + String.format("%.2f", checkX) + ", "
                         + String.format("%.2f", checkY) + ", "
-                        + String.format("%.2f", checkZ) + ")");
+                        + String.format("%.2f", checkZ) + ")"
+                        + " Causa=" + bloque);
                 return false;
             }
         }
@@ -494,10 +511,12 @@ public class AutoWalker {
                     caida++;
                 }
                 if (caida > CAIDA_MAXIMA) {
+                    Identifier sueloId = BuiltInRegistries.BLOCK.getKey(estadoSuelo.getBlock());
                     debug("simularAvanceSeguro FALSA: precipicio al destino. Caída=" + caida
                             + " Pos=(" + String.format("%.2f", destinoX) + ", "
                             + String.format("%.2f", destinoY) + ", "
-                            + String.format("%.2f", destinoZ) + ")");
+                            + String.format("%.2f", destinoZ) + ")"
+                            + " BloqueSuelo=" + (sueloId != null ? sueloId.toString() : "?"));
                     return false;
                 }
             }
@@ -537,6 +556,88 @@ public class AutoWalker {
             }
         }
 
+        if (hayEntidadBloqueando(client, hitbox)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Devuelve una descripción del primer bloque o entidad que colisiona
+     * con la hitbox dada. Se usa para los logs de debug.
+     */
+    private String describirBloqueQueColisiona(Minecraft client, AABB hitbox) {
+        int minX = (int) Math.floor(hitbox.minX);
+        int maxX = (int) Math.floor(hitbox.maxX);
+        int minY = (int) Math.floor(hitbox.minY);
+        int maxY = (int) Math.floor(hitbox.maxY);
+        int minZ = (int) Math.floor(hitbox.minZ);
+        int maxZ = (int) Math.floor(hitbox.maxZ);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    BlockPos bpos = new BlockPos(bx, by, bz);
+                    BlockState estado = client.level.getBlockState(bpos);
+
+                    if (estado.isAir()) continue;
+                    if (esBloquePisable(client, bpos, estado)) continue;
+                    if (esBloqueNoSolido(estado)) continue;
+
+                    VoxelShape forma = estado.getCollisionShape(client.level, bpos);
+                    if (forma.isEmpty()) continue;
+
+                    for (AABB cajaBloque : forma.toAabbs()) {
+                        AABB cajaReal = cajaBloque.move(bx, by, bz);
+                        if (cajaReal.intersects(hitbox)) {
+                            Identifier id = BuiltInRegistries.BLOCK.getKey(estado.getBlock());
+                            return "BLOQUE: " + (id != null ? id.toString() : estado.getBlock().toString())
+                                    + " en (" + bx + ", " + by + ", " + bz + ")"
+                                    + " alturaColision=" + String.format("%.2f", forma.max(Direction.Axis.Y));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (client.level != null) {
+            for (Entity entidad : client.level.entitiesForRendering()) {
+                if (entidad == client.player) continue;
+                if (entidad.isSpectator()) continue;
+                if (entidad.noPhysics) continue;
+
+                AABB cajaEntidad = entidad.getBoundingBox();
+                if (cajaEntidad.intersects(hitbox)) {
+                    Identifier id = BuiltInRegistries.ENTITY_TYPE.getKey(entidad.getType());
+                    return "ENTIDAD: " + (id != null ? id.toString() : entidad.getType().toString())
+                            + " en (" + String.format("%.2f", entidad.getX()) + ", "
+                            + String.format("%.2f", entidad.getY()) + ", "
+                            + String.format("%.2f", entidad.getZ()) + ")";
+                }
+            }
+        }
+
+        return "desconocido";
+    }
+
+    /**
+     * Comprueba si hay entidades con colisión (marcos, cuadros, botes, etc.)
+     * intersectando con la hitbox dada.
+     */
+    private boolean hayEntidadBloqueando(Minecraft client, AABB hitbox) {
+        if (client.level == null) return false;
+
+        for (Entity entidad : client.level.entitiesForRendering()) {
+            if (entidad == client.player) continue;
+            if (entidad.isSpectator()) continue;
+            if (entidad.noPhysics) continue;
+
+            AABB cajaEntidad = entidad.getBoundingBox();
+            if (cajaEntidad.intersects(hitbox)) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -628,12 +729,14 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitbox)) {
+                String bloque = describirBloqueQueColisiona(client, hitbox);
                 debug("esDireccionSegura FALSA: colisión en muestra " + i + "/"
                         + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
                         + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
                         + " Pos=(" + String.format("%.2f", checkX) + ", "
                         + String.format("%.2f", checkY) + ", "
-                        + String.format("%.2f", checkZ) + ")");
+                        + String.format("%.2f", checkZ) + ")"
+                        + " Causa=" + bloque);
                 return false;
             }
 
@@ -652,12 +755,14 @@ public class AutoWalker {
                         caida++;
                     }
                     if (caida > CAIDA_MAXIMA) {
+                        Identifier sueloId = BuiltInRegistries.BLOCK.getKey(estadoSuelo.getBlock());
                         debug("esDireccionSegura FALSA: precipicio en muestra " + i + "/"
                                 + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
                                 + " bloques. Caída=" + caida
                                 + " Pos=(" + String.format("%.2f", checkX) + ", "
                                 + String.format("%.2f", checkY) + ", "
-                                + String.format("%.2f", checkZ) + ")");
+                                + String.format("%.2f", checkZ) + ")"
+                                + " BloqueSuelo=" + (sueloId != null ? sueloId.toString() : "?"));
                         return false;
                     }
                 }
