@@ -3,12 +3,9 @@
   "id": "autowarp",
   "version": "1.0.0",
   "name": "Auto Warp",
-  "description": "Ejecuta /warp shop automáticamente cuando el inventario está lleno durante 3 segundos.",
-  "authors": [
-    "Tu Nombre"
-  ],
+  "description": "Ejecuta /warp shop automáticamente cuando el inventario está lleno.",
+  "authors": ["Tu Nombre"],
   "license": "MIT",
-  "icon": "assets/autowarp/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": [

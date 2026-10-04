@@ -1,5 +1,6 @@
-package com.ejemplo.autowarp;
+package com.ejemplo.autowarp.logic;
 
+import com.ejemplo.autowarp.config.AutoWarpConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
@@ -10,29 +11,33 @@ import net.minecraft.world.item.ItemStack;
 public class InventoryChecker {
 
     private static final int TICKS_POR_SEGUNDO = 20;
-    private static final int TIEMPO_ESPERA = 3 * TICKS_POR_SEGUNDO;
     private static final int THROTTLE_TICKS = 2;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
     private boolean inventarioLlenoAnterior = false;
     private boolean enviandoComando = false;
+    private int cooldownTicks = 0;
 
     public void tick(Minecraft client) {
+        AutoWarpConfig cfg = AutoWarpConfig.get();
+        if (cfg == null || !cfg.modActivado) return;
+
         LocalPlayer player = client.player;
         if (player == null || client.gameMode == null) {
             resetear();
             return;
         }
 
-        if (enviandoComando) {
+        if (cooldownTicks > 0) {
+            cooldownTicks--;
             return;
         }
 
+        if (enviandoComando) return;
+
         throttleCounter++;
-        if (throttleCounter < THROTTLE_TICKS) {
-            return;
-        }
+        if (throttleCounter < THROTTLE_TICKS) return;
         throttleCounter = 0;
 
         boolean inventarioLleno = estaInventarioLleno(player);
@@ -45,26 +50,26 @@ public class InventoryChecker {
 
             contadorTicks += THROTTLE_TICKS;
 
+            int segundosEspera = cfg.segundosInventarioLleno;
+            int ticksEspera = segundosEspera * TICKS_POR_SEGUNDO;
             int segundoActual = contadorTicks / TICKS_POR_SEGUNDO;
             int tickEnSegundo = contadorTicks % TICKS_POR_SEGUNDO;
 
-            if (tickEnSegundo == THROTTLE_TICKS && segundoActual >= 1 && segundoActual <= 3) {
-                // ✅ Aviso superpuesto, solo visible para el cliente
+            if (cfg.mostrarMensajesOverlay
+                    && tickEnSegundo == THROTTLE_TICKS
+                    && segundoActual >= 1
+                    && segundoActual <= segundosEspera) {
                 player.sendOverlayMessage(Component.literal("T" + segundoActual));
             }
 
-            if (contadorTicks >= TIEMPO_ESPERA) {
-                ejecutarComando(client, player);
+            if (contadorTicks >= ticksEspera) {
+                ejecutarComando(client, player, cfg);
             }
         } else {
             resetear();
         }
     }
 
-    /**
-     * Verifica si los 36 slots del inventario principal están ocupados.
-     * Filtra por container == playerInventory para ignorar cofres abiertos.
-     */
     private boolean estaInventarioLleno(LocalPlayer player) {
         var menu = player.containerMenu;
         Inventory playerInventory = player.getInventory();
@@ -74,32 +79,25 @@ public class InventoryChecker {
 
         for (Slot slot : menu.slots) {
             if (slot.container != playerInventory) continue;
-
             int slotIndex = slot.index;
-            // Los 36 slots del inventario principal van del 9 al 44
             if (slotIndex < 9 || slotIndex > 44) continue;
 
             slotsInventario++;
-
             ItemStack stack = slot.getItem();
-            if (!stack.isEmpty()) {
-                slotsOcupados++;
-            }
+            if (!stack.isEmpty()) slotsOcupados++;
         }
 
         return slotsInventario == 36 && slotsOcupados == 36;
     }
 
-    /**
-     * Envía /warp shop al servidor como si el jugador lo hubiera escrito.
-     */
-    private void ejecutarComando(Minecraft client, LocalPlayer player) {
+    private void ejecutarComando(Minecraft client, LocalPlayer player, AutoWarpConfig cfg) {
         enviandoComando = true;
 
         try {
             if (client.getConnection() != null) {
                 client.getConnection().sendCommand("warp shop");
             }
+            cooldownTicks = cfg.minutosDelayTrasComando * 60 * TICKS_POR_SEGUNDO;
         } catch (Exception e) {
             // Silenciar errores
         } finally {
