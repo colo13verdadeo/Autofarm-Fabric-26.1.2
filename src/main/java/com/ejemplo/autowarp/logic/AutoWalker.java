@@ -6,7 +6,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Half;
+import net.minecraft.world.level.block.state.properties.StairsShape;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
@@ -18,14 +21,18 @@ public class AutoWalker {
     private static final double DISTANCIA_MIRA = 1.5;
     private static final int CAIDA_MAXIMA = 1;
 
-    /** Altura del jugador en bloques (pies a cabeza). */
     private static final double ALTURA_JUGADOR = 1.8;
-    /** Ancho del jugador (hitbox de 0.6). */
     private static final double ANCHO_JUGADOR = 0.6;
+
+    /** Duración del salto forzado en ticks. */
+    private static final int DURACION_SALTO_TICKS = 8;
 
     private boolean activo = false;
     private int targetX, targetY, targetZ;
     private int timeoutTicks = 0;
+
+    /** Contador de salto en curso. 0 = no saltando. */
+    private int saltoTicks = 0;
 
     public void iniciar(int x, int y, int z) {
         this.activo = true;
@@ -33,14 +40,17 @@ public class AutoWalker {
         this.targetY = y;
         this.targetZ = z;
         this.timeoutTicks = 0;
+        this.saltoTicks = 0;
     }
 
     public void detener(Minecraft client) {
         if (!activo) return;
         this.activo = false;
+        this.saltoTicks = 0;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
+            client.options.keyJump.setDown(false);
         }
     }
 
@@ -57,6 +67,7 @@ public class AutoWalker {
             return;
         }
 
+        // Cancelar si el jugador pulsa movimiento manual
         if (client.options.keyDown.isDown()
                 || client.options.keyLeft.isDown()
                 || client.options.keyRight.isDown()) {
@@ -90,24 +101,21 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === COMPROBACIÓN DE SEGURIDAD CON COLISIONES REALES ===
+        // === COMPROBACIÓN DE SEGURIDAD ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
 
-        // Posición del bloque delante a la altura de los pies
         BlockPos piesDelante = BlockPos.containing(
                 player.getX() + forwardX,
                 player.getY(),
                 player.getZ() + forwardZ
         );
-
-        // === 1. COMPROBAR SI EL JUGADOR CABE (pies + cabeza) ===
-        // El jugador ocupa 2 bloques de altura (pies y cabeza)
         BlockPos cabezaDelante = piesDelante.above();
+        BlockPos sueloDelante = piesDelante.below();
 
-        // Crear la hitbox del jugador en la posición delantera
-        AABB hitboxJugadorDelante = new AABB(
+        // Hitbox del jugador en la posición delantera
+        AABB hitboxDelante = new AABB(
                 piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getY(),
                 piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
@@ -116,31 +124,55 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // Comprobar colisión con el bloque de los pies
-        if (colisionaConBloque(client, piesDelante, hitboxJugadorDelante)) {
+        // 1. Colisión a la altura de los pies
+        boolean colisionPies = colisionaConBloque(client, piesDelante, hitboxDelante);
+
+        // 2. Colisión a la altura de la cabeza
+        boolean colisionCabeza = colisionaConBloque(client, cabezaDelante, hitboxDelante);
+
+        // Si hay colisión en la cabeza, siempre detenerse (no se puede saltar)
+        if (colisionCabeza) {
             player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Obstrucción a la altura de los pies delante. Deteniendo navegación."));
+                    "[AutoWarp] Obstrucción a la altura de la cabeza. Deteniendo navegación."));
             detener(client);
             return;
         }
 
-        // Comprobar colisión con el bloque de la cabeza
-        if (colisionaConBloque(client, cabezaDelante, hitboxJugadorDelante)) {
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Obstrucción a la altura de la cabeza delante. Deteniendo navegación."));
-            detener(client);
+        // Si hay colisión en los pies, intentar saltar si es un obstáculo escalable
+        if (colisionPies) {
+            if (esEscalable(client, piesDelante, cabezaDelante)) {
+                // Iniciar salto si no estamos ya saltando
+                if (saltoTicks == 0) {
+                    saltoTicks = DURACION_SALTO_TICKS;
+                }
+            } else {
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Pared no escalable delante. Deteniendo navegación."));
+                detener(client);
+                return;
+            }
+        }
+
+        // === GESTIÓN DEL SALTO ===
+        if (saltoTicks > 0) {
+            client.options.keyJump.setDown(true);
+            saltoTicks--;
+            if (saltoTicks == 0) {
+                client.options.keyJump.setDown(false);
+            }
+            // Durante el salto, mantener el avance
+            client.options.keyUp.setDown(true);
+            client.options.keySprint.setDown(true);
             return;
         }
 
-        // === 2. COMPROBAR PRECIPICIO ===
-        BlockPos debajoDelante = piesDelante.below();
-        BlockState bloqueDebajoDelante = client.level.getBlockState(debajoDelante);
-
-        boolean haySuelo = esBloqueCaminable(client, debajoDelante, bloqueDebajoDelante);
+        // === COMPROBAR PRECIPICIO ===
+        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
+        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
         if (!haySuelo) {
             int caida = 0;
-            BlockPos check = debajoDelante;
+            BlockPos check = sueloDelante;
             while (caida <= CAIDA_MAXIMA + 1) {
                 BlockState st = client.level.getBlockState(check);
                 if (esBloqueCaminable(client, check, st)) break;
@@ -163,25 +195,46 @@ public class AutoWalker {
     }
 
     /**
-     * Comprueba si la hitbox del jugador intersecta con la forma de colisión
-     * real del bloque. Esto detecta paneles de vidrio, losas, escaleras, vallas,
-     * y cualquier bloque con forma incompleta.
+     * Determina si un obstáculo a la altura de los pies es escalable.
+     * Escalables: losas, escaleras (no invertidas), y bloques de altura <= 1.0
+     * con el hueco de la cabeza libre.
      */
+    private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+
+        // El bloque de la cabeza debe estar libre para poder saltar
+        BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
+        if (!estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
+            return false;
+        }
+
+        // Las losas son escalables (altura 0.5)
+        if (estadoPies.is(BlockTags.SLABS)) return true;
+
+        // Las escaleras normales (no invertidas) son escalables
+        if (estadoPies.getBlock() instanceof StairBlock) {
+            // Verificar que no sea una escalera invertida (half=top)
+            Half half = estadoPies.getValue(StairBlock.HALF);
+            return half == Half.BOTTOM;
+        }
+
+        // Cualquier bloque con altura de colisión <= 1.0 y > 0.5 es escalable
+        VoxelShape forma = estadoPies.getCollisionShape(client.level, piesDelante);
+        if (forma.isEmpty()) return false;
+
+        double altura = forma.max(Direction.Axis.Y);
+        return altura <= 1.0 && altura > 0.5;
+    }
+
     private boolean colisionaConBloque(Minecraft client, BlockPos pos, AABB hitboxJugador) {
         BlockState estado = client.level.getBlockState(pos);
 
-        // Los bloques de aire no colisionan
         if (estado.isAir()) return false;
 
-        // Obtener la forma de colisión real del bloque
         VoxelShape forma = estado.getCollisionShape(client.level, pos);
-
-        // Si la forma está vacía, el bloque es atravesable
         if (forma.isEmpty()) return false;
 
-        // Comprobar si alguna de las cajas de colisión del bloque intersecta con la hitbox del jugador
         for (AABB cajaBloque : forma.toAabbs()) {
-            // Las cajas de VoxelShape son relativas a 0,0,0; hay que desplazarlas a la posición real
             AABB cajaReal = cajaBloque.move(pos.getX(), pos.getY(), pos.getZ());
             if (cajaReal.intersects(hitboxJugador)) {
                 return true;
@@ -191,10 +244,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Determina si un bloque es caminable (suelo firme o losa inferior).
-     * Usa la altura de colisión para detectar losas y bloques parciales.
-     */
     private boolean esBloqueCaminable(Minecraft client, BlockPos pos, BlockState estado) {
         if (estado.isAir()) return false;
 
