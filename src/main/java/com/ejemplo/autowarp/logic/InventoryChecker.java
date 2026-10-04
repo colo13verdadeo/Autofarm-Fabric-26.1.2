@@ -21,7 +21,7 @@ public class InventoryChecker {
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
-        if (cfg == null || !cfg.modActivado) return;
+        if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) return;
 
         LocalPlayer player = client.player;
         if (player == null || client.gameMode == null) {
@@ -95,9 +95,16 @@ public class InventoryChecker {
 
         try {
             if (client.getConnection() != null) {
-                client.getConnection().sendCommand("warp shop");
+                // Enviar el comando configurable (sin la barra inicial)
+                String cmd = cfg.comandoWarp;
+                if (cmd != null && !cmd.isEmpty()) {
+                    // Quitar la barra inicial si el usuario la escribió
+                    if (cmd.startsWith("/")) cmd = cmd.substring(1);
+                    client.getConnection().sendCommand(cmd);
+                }
             }
-            cooldownTicks = cfg.minutosDelayTrasComando * 60 * TICKS_POR_SEGUNDO;
+            // Aplicar cooldown configurable en segundos
+            cooldownTicks = cfg.segundosCooldown * TICKS_POR_SEGUNDO;
         } catch (Exception e) {
             // Silenciar errores
         } finally {

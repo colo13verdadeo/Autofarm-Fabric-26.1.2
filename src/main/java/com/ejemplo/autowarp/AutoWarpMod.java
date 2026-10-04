@@ -19,34 +19,31 @@ public class AutoWarpMod implements ClientModInitializer {
 
     private static KeyMapping abrirConfigKey;
 
-    // Categoría de tecla (objeto, no String, desde 1.21.9)
+    // Categoría de tecla
     private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(
             Identifier.fromNamespaceAndPath(MOD_ID, "autowarp")
     );
 
     @Override
     public void onInitializeClient() {
-        // Cargar configuración y coordenadas
         AutoWarpConfig.load();
         CoordStorage.cargar();
 
-        // Tecla para abrir la pantalla: "-"
+        // Tecla para abrir la pantalla: P
         abrirConfigKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.autowarp.abrir_config",
                 InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_MINUS,
+                GLFW.GLFW_KEY_P,
                 CATEGORY
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // Abrir pantalla con la tecla "-"
             while (abrirConfigKey.consumeClick()) {
                 if (client.screen == null) {
                     AutoWarpScreen.open();
                 }
             }
 
-            // Lógica del checker
             if (client.player != null && client.level != null) {
                 inventoryChecker.tick(client);
             }

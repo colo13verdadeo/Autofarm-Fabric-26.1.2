@@ -5,6 +5,7 @@ import com.ejemplo.autowarp.config.CoordStorage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -20,6 +21,8 @@ public class AutoWarpScreen extends Screen {
     private final List<CoordStorage.Coordenada> coordsMostradas = new ArrayList<>();
     private int scrollOffset = 0;
 
+    private EditBox comandoBox;
+
     public AutoWarpScreen() {
         super(Component.literal("Auto-Warp - Configuración"));
     }
@@ -32,9 +35,9 @@ public class AutoWarpScreen extends Screen {
         int centerX = this.width / 2;
         int buttonWidth = 240;
         int buttonHeight = 20;
-        int y = 40;
+        int y = 35;
 
-        // Mod on/off
+        // --- Fila 1: Mod on/off ---
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mod: " + (cfg.modActivado ? "ACTIVADO" : "DESACTIVADO")),
                 btn -> {
@@ -44,7 +47,18 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
 
-        // Segundos inventario lleno
+        // --- Fila 2: Checkeo de inventario lleno on/off ---
+        y += 25;
+        this.addRenderableWidget(Button.builder(
+                Component.literal("Chequeo inventario lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")),
+                btn -> {
+                    cfg.checkeoActivo = !cfg.checkeoActivo;
+                    AutoWarpConfig.save();
+                    btn.setMessage(Component.literal("Chequeo inventario lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")));
+                }
+        ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
+
+        // --- Fila 3: Segundos inventario lleno ---
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Segundos lleno: " + cfg.segundosInventarioLleno + "s"),
@@ -55,18 +69,27 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
 
-        // Minutos de delay
+        // --- Fila 4: Cooldown en segundos ---
         y += 25;
         this.addRenderableWidget(Button.builder(
-                Component.literal("Delay tras comando: " + cfg.minutosDelayTrasComando + " min"),
+                Component.literal("Cooldown: " + cfg.segundosCooldown + "s"),
                 btn -> {
-                    cfg.minutosDelayTrasComando = (cfg.minutosDelayTrasComando % 30) + 1;
+                    // Ciclar por valores útiles: 30, 60, 90, 120, 180, 300, 600
+                    int[] valores = {30, 60, 90, 120, 180, 300, 600};
+                    int siguiente = valores[0];
+                    for (int i = 0; i < valores.length; i++) {
+                        if (cfg.segundosCooldown == valores[i]) {
+                            siguiente = valores[(i + 1) % valores.length];
+                            break;
+                        }
+                    }
+                    cfg.segundosCooldown = siguiente;
                     AutoWarpConfig.save();
-                    btn.setMessage(Component.literal("Delay tras comando: " + cfg.minutosDelayTrasComando + " min"));
+                    btn.setMessage(Component.literal("Cooldown: " + cfg.segundosCooldown + "s"));
                 }
         ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
 
-        // Mensajes overlay
+        // --- Fila 5: Mensajes overlay ---
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mensajes T1/T2/T3: " + (cfg.mostrarMensajesOverlay ? "SÍ" : "NO")),
@@ -77,8 +100,29 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
 
-        // Añadir cartel
-        y += 35;
+        // --- Fila 6: EditBox para el comando ---
+        y += 30;
+        this.comandoBox = new EditBox(
+                this.font,
+                centerX - buttonWidth / 2,
+                y,
+                buttonWidth,
+                buttonHeight,
+                Component.literal("Comando")
+        );
+        this.comandoBox.setValue(cfg.comandoWarp);
+        this.comandoBox.setMaxLength(128);
+        this.comandoBox.setResponder(val -> {
+            cfg.comandoWarp = val;
+            AutoWarpConfig.save();
+        });
+        this.addRenderableWidget(this.comandoBox);
+
+        // Etiqueta del comando
+        // (se dibuja en extractRenderState)
+
+        // --- Botón: Añadir cartel ---
+        y += 30;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Añadir cartel que estoy mirando"),
                 btn -> {
@@ -87,7 +131,7 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(centerX - buttonWidth / 2, y, buttonWidth, buttonHeight).build());
 
-        // Volver
+        // --- Botón volver ---
         this.addRenderableWidget(Button.builder(
                 Component.literal("Volver"),
                 btn -> Minecraft.getInstance().setScreen(null)
@@ -108,6 +152,13 @@ public class AutoWarpScreen extends Screen {
 
         graphics.centeredText(this.font, this.title, this.width / 2, 15, 0xFFFFFFFF);
 
+        // Etiqueta del comando
+        graphics.text(this.font,
+                "Comando a ejecutar:",
+                this.width / 2 - 120, 175,
+                0xFFAAAAAA, true);
+
+        // Título de la lista de coordenadas
         String contexto = CoordStorage.getNombreContextoActual();
         graphics.text(this.font,
                 "Carteles en: " + contexto,

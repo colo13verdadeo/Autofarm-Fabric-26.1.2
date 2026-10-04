@@ -19,8 +19,18 @@ public final class AutoWarpConfig {
 
     // ==== Variables configurables ====
     public boolean modActivado = true;
+
+    /** Activa/desactiva el chequeo de inventario lleno con /warp shop. */
+    public boolean checkeoActivo = true;
+
+    /** Comando que se ejecuta cuando el inventario está lleno. */
+    public String comandoWarp = "warp shop";
+
     public int segundosInventarioLleno = 3;
-    public int minutosDelayTrasComando = 2;
+
+    /** Cooldown tras ejecutar el comando, en segundos. */
+    public int segundosCooldown = 120;
+
     public boolean mostrarMensajesOverlay = true;
 
     private static AutoWarpConfig INSTANCE = new AutoWarpConfig();
