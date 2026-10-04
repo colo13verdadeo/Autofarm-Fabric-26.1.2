@@ -151,6 +151,47 @@ public class AutoWalker {
     }
 
     /**
+     * Comprueba si una posición concreta tiene suelo caminable debajo.
+     */
+    private boolean haySueloEn(Minecraft client, double x, double y, double z) {
+        BlockPos pos = BlockPos.containing(x, y - 0.1, z);
+        BlockState estado = client.level.getBlockState(pos);
+        return esBloqueCaminable(client, pos, estado);
+    }
+
+    /**
+     * Comprueba si retroceder es seguro desde la posición actual.
+     */
+    private boolean retrocesoEsSeguro(Minecraft client, LocalPlayer player) {
+        // Retroceder = dirección opuesta al yaw actual
+        double yawRad = Math.toRadians(player.getYRot());
+        double backX = Math.sin(yawRad);
+        double backZ = -Math.cos(yawRad);
+
+        double checkX = player.getX() + backX * 0.8;
+        double checkZ = player.getZ() + backZ * 0.8;
+        double checkY = player.getY();
+
+        return haySueloEn(client, checkX, checkY, checkZ);
+    }
+
+    /**
+     * Comprueba si desviar lateralmente es seguro.
+     * lado = 1 izquierda, -1 derecha.
+     */
+    private boolean desvioLateralEsSeguro(Minecraft client, LocalPlayer player, int lado) {
+        double yawRad = Math.toRadians(player.getYRot() + 90 * lado);
+        double sideX = -Math.sin(yawRad);
+        double sideZ = Math.cos(yawRad);
+
+        double checkX = player.getX() + sideX * 0.8;
+        double checkZ = player.getZ() + sideZ * 0.8;
+        double checkY = player.getY();
+
+        return haySueloEn(client, checkX, checkY, checkZ);
+    }
+
+    /**
      * Comprueba si el jugador está justo al borde de un precipicio.
      */
     private boolean alBordeDePrecipicio(Minecraft client, LocalPlayer player) {
@@ -199,6 +240,57 @@ public class AutoWalker {
             caida++;
         }
         return true;
+    }
+
+    /**
+     * Maneja la situación de "al borde de precipicio".
+     * Elige la dirección segura: retroceder, desviar izquierda, desviar derecha o quedarse quieto.
+     */
+    private void manejarBordeDePrecipicio(Minecraft client, LocalPlayer player) {
+        // 1. ¿Retroceder es seguro?
+        if (retrocesoEsSeguro(client, player)) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(true);
+            retrocesoTicks = DURACION_RETROCESO_TICKS;
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Al borde de precipicio. Retrocediendo."));
+            return;
+        }
+
+        // 2. ¿Desviar a la izquierda es seguro?
+        if (desvioLateralEsSeguro(client, player, 1)) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(false);
+            client.options.keyLeft.setDown(true);
+            retrocesoTicks = DURACION_RETROCESO_TICKS;
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Al borde. Desviando izquierda."));
+            return;
+        }
+
+        // 3. ¿Desviar a la derecha es seguro?
+        if (desvioLateralEsSeguro(client, player, -1)) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(false);
+            client.options.keyRight.setDown(true);
+            retrocesoTicks = DURACION_RETROCESO_TICKS;
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Al borde. Desviando derecha."));
+            return;
+        }
+
+        // 4. Ninguna dirección es segura: quedarse quieto
+        client.options.keyUp.setDown(false);
+        client.options.keySprint.setDown(false);
+        client.options.keyDown.setDown(false);
+        client.options.keyLeft.setDown(false);
+        client.options.keyRight.setDown(false);
+        player.sendSystemMessage(Component.literal(
+                "[AutoWarp] Bloqueado en todas direcciones. Esperando."));
+        esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
     }
 
     public void tick(Minecraft client) {
@@ -257,17 +349,54 @@ public class AutoWalker {
         if (!player.onGround() && saltoTicks == 0 && ticksIgnorandoSuelo == 0) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(false);
+            return;
+        }
+
+        // === ESPERA ENTRE PRUEBAS ===
+        if (esperaEntrePruebasTicks > 0) {
+            esperaEntrePruebasTicks--;
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(false);
+            client.options.keyLeft.setDown(false);
+            client.options.keyRight.setDown(false);
+            client.options.keyJump.setDown(false);
+
+            if (esperaEntrePruebasTicks <= 0) {
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    registrarPruebaFallida(client, player);
+                }
+            }
+            return;
+        }
+
+        // === RETROCESO ===
+        if (retrocesoTicks > 0) {
+            retrocesoTicks--;
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            // Mantener la tecla que corresponda
+            if (client.options.keyDown.isDown()
+                    || client.options.keyLeft.isDown()
+                    || client.options.keyRight.isDown()) {
+                // Ya está pulsada la tecla correcta
+            } else {
+                client.options.keyDown.setDown(true);
+            }
+
+            if (retrocesoTicks <= 0) {
+                client.options.keyDown.setDown(false);
+                client.options.keyLeft.setDown(false);
+                client.options.keyRight.setDown(false);
+                esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
+            }
             return;
         }
 
         // === DETECCIÓN DE BORDE DE PRECIPICIO ===
-        if (alBordeDePrecipicio(client, player) && retrocesoTicks == 0) {
-            client.options.keyUp.setDown(false);
-            client.options.keySprint.setDown(false);
-            client.options.keyDown.setDown(true);
-            retrocesoTicks = DURACION_RETROCESO_TICKS;
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Al borde de precipicio. Retrocediendo."));
+        if (alBordeDePrecipicio(client, player)) {
+            manejarBordeDePrecipicio(client, player);
             return;
         }
 
@@ -289,36 +418,6 @@ public class AutoWalker {
 
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
-            return;
-        }
-
-        // === ESPERA ENTRE PRUEBAS ===
-        if (esperaEntrePruebasTicks > 0) {
-            esperaEntrePruebasTicks--;
-            client.options.keyUp.setDown(false);
-            client.options.keySprint.setDown(false);
-            client.options.keyDown.setDown(false);
-            client.options.keyJump.setDown(false);
-
-            if (esperaEntrePruebasTicks <= 0) {
-                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                    registrarPruebaFallida(client, player);
-                }
-            }
-            return;
-        }
-
-        // === RETROCESO ===
-        if (retrocesoTicks > 0) {
-            retrocesoTicks--;
-            client.options.keyUp.setDown(false);
-            client.options.keySprint.setDown(false);
-            client.options.keyDown.setDown(true);
-
-            if (retrocesoTicks <= 0) {
-                client.options.keyDown.setDown(false);
-                esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
-            }
             return;
         }
 
@@ -365,9 +464,7 @@ public class AutoWalker {
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
-                    retrocesoTicks = DURACION_RETROCESO_TICKS;
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Desvío peligroso. Retrocediendo."));
+                    manejarBordeDePrecipicio(client, player);
                     return;
                 }
 
@@ -381,9 +478,7 @@ public class AutoWalker {
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
-                    retrocesoTicks = DURACION_RETROCESO_TICKS;
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Desvío bloqueado. Retrocediendo."));
+                    manejarBordeDePrecipicio(client, player);
                     return;
                 }
 
@@ -483,9 +578,7 @@ public class AutoWalker {
                 }
 
                 if (caida > CAIDA_MAXIMA) {
-                    retrocesoTicks = DURACION_RETROCESO_TICKS;
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Precipicio detectado. Retrocediendo para buscar ruta."));
+                    manejarBordeDePrecipicio(client, player);
                     return;
                 }
             }
@@ -510,7 +603,7 @@ public class AutoWalker {
                 "[AutoWarp] Prueba fallida " + pruebasFallidas + "/" + MAX_PRUEBAS_FALLIDAS
                 + ". Retrocediendo para reintentar."));
 
-        retrocesoTicks = DURACION_RETROCESO_TICKS;
+        manejarBordeDePrecipicio(client, player);
         intentosDesvio = 0;
     }
 
@@ -573,12 +666,6 @@ public class AutoWalker {
                     caida++;
                 }
                 if (caida > CAIDA_MAXIMA) {
-                    Identifier sueloId = BuiltInRegistries.BLOCK.getKey(estadoSuelo.getBlock());
-                    debug("simularAvanceSeguro FALSA: precipicio al destino. Caída=" + caida
-                            + " Pos=(" + String.format("%.2f", destinoX) + ", "
-                            + String.format("%.2f", destinoY) + ", "
-                            + String.format("%.2f", destinoZ) + ")"
-                            + " BloqueSuelo=" + (sueloId != null ? sueloId.toString() : "?"));
                     return false;
                 }
             }
@@ -655,23 +742,6 @@ public class AutoWalker {
                                     + " alturaColision=" + String.format("%.2f", forma.max(Direction.Axis.Y));
                         }
                     }
-                }
-            }
-        }
-
-        if (client.level != null) {
-            for (Entity entidad : client.level.entitiesForRendering()) {
-                if (entidad == client.player) continue;
-                if (entidad.isSpectator()) continue;
-                if (entidad.noPhysics) continue;
-
-                AABB cajaEntidad = entidad.getBoundingBox();
-                if (cajaEntidad.intersects(hitbox)) {
-                    Identifier id = BuiltInRegistries.ENTITY_TYPE.getKey(entidad.getType());
-                    return "ENTIDAD: " + (id != null ? id.toString() : entidad.getType().toString())
-                            + " en (" + String.format("%.2f", entidad.getX()) + ", "
-                            + String.format("%.2f", entidad.getY()) + ", "
-                            + String.format("%.2f", entidad.getZ()) + ")";
                 }
             }
         }
@@ -783,14 +853,6 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitbox)) {
-                String bloque = describirBloqueQueColisiona(client, hitbox);
-                debug("esDireccionSegura FALSA: colisión en muestra " + i + "/"
-                        + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
-                        + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
-                        + " Pos=(" + String.format("%.2f", checkX) + ", "
-                        + String.format("%.2f", checkY) + ", "
-                        + String.format("%.2f", checkZ) + ")"
-                        + " Causa=" + bloque);
                 return false;
             }
 
@@ -809,14 +871,6 @@ public class AutoWalker {
                         caida++;
                     }
                     if (caida > CAIDA_MAXIMA) {
-                        Identifier sueloId = BuiltInRegistries.BLOCK.getKey(estadoSuelo.getBlock());
-                        debug("esDireccionSegura FALSA: precipicio en muestra " + i + "/"
-                                + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
-                                + " bloques. Caída=" + caida
-                                + " Pos=(" + String.format("%.2f", checkX) + ", "
-                                + String.format("%.2f", checkY) + ", "
-                                + String.format("%.2f", checkZ) + ")"
-                                + " BloqueSuelo=" + (sueloId != null ? sueloId.toString() : "?"));
                         return false;
                     }
                 }
