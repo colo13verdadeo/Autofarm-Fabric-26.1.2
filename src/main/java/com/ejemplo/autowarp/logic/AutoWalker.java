@@ -36,6 +36,9 @@ public class AutoWalker {
 
     private static final double DISTANCIA_SIMULACION = 0.5;
 
+    /** Número de muestras a lo largo de la trayectoria simulada. */
+    private static final int MUESTRAS_TRAYECTORIA = 5;
+
     private static final int MAX_PRUEBAS_FALLIDAS = 11;
 
     private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
@@ -159,7 +162,6 @@ public class AutoWalker {
             return;
         }
 
-        // Objetivo ahora es la coordenada decimal exacta (sin +0.5)
         double dx = targetX - player.getX();
         double dz = targetZ - player.getZ();
         double distanciaHorizontal = Math.sqrt(dx * dx + dz * dz);
@@ -371,57 +373,55 @@ public class AutoWalker {
         intentosDesvio = 0;
     }
 
+    // =====================================================
+    // SIMULACIÓN
+    // =====================================================
+
+    /**
+     * Simula el avance del jugador muestreando varios puntos intermedios
+     * entre la posición actual y la futura. Así se detectan colisiones
+     * que ocurrirían en el trayecto, no solo en el destino final.
+     */
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
-        double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
-        double forwardZ = Math.cos(yawRad) * DISTANCIA_SIMULACION;
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
 
-        double nuevaX = player.getX() + forwardX;
-        double nuevaY = player.getY();
-        double nuevaZ = player.getZ() + forwardZ;
+        double distanciaTotal = DISTANCIA_SIMULACION;
 
-        AABB hitboxNueva = new AABB(
-                nuevaX - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                nuevaY,
-                nuevaZ - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                nuevaX + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
-                nuevaY + ALTURA_JUGADOR,
-                nuevaZ + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
-        );
+        for (int i = 1; i <= MUESTRAS_TRAYECTORIA; i++) {
+            double factor = (double) i / MUESTRAS_TRAYECTORIA;
+            double distanciaIntermedia = distanciaTotal * factor;
 
-        int minX = (int) Math.floor(hitboxNueva.minX);
-        int maxX = (int) Math.floor(hitboxNueva.maxX);
-        int minY = (int) Math.floor(hitboxNueva.minY);
-        int maxY = (int) Math.floor(hitboxNueva.maxY);
-        int minZ = (int) Math.floor(hitboxNueva.minZ);
-        int maxZ = (int) Math.floor(hitboxNueva.maxZ);
+            double checkX = player.getX() + forwardX * distanciaIntermedia;
+            double checkY = player.getY();
+            double checkZ = player.getZ() + forwardZ * distanciaIntermedia;
 
-        for (int bx = minX; bx <= maxX; bx++) {
-            for (int by = minY; by <= maxY; by++) {
-                for (int bz = minZ; bz <= maxZ; bz++) {
-                    BlockPos bpos = new BlockPos(bx, by, bz);
-                    BlockState estado = client.level.getBlockState(bpos);
+            // El margen lateral solo en la última muestra (destino final)
+            double margen = (i == MUESTRAS_TRAYECTORIA) ? MARGEN_LATERAL : 0.0;
 
-                    if (estado.isAir()) continue;
-                    if (esBloquePisable(client, bpos, estado)) continue;
-                    if (esBloqueNoSolido(estado)) continue;
+            AABB hitboxIntermedia = new AABB(
+                    checkX - ANCHO_JUGADOR / 2 - margen,
+                    checkY,
+                    checkZ - ANCHO_JUGADOR / 2 - margen,
+                    checkX + ANCHO_JUGADOR / 2 + margen,
+                    checkY + ALTURA_JUGADOR,
+                    checkZ + ANCHO_JUGADOR / 2 + margen
+            );
 
-                    VoxelShape forma = estado.getCollisionShape(client.level, bpos);
-                    if (forma.isEmpty()) continue;
-
-                    for (AABB cajaBloque : forma.toAabbs()) {
-                        AABB cajaReal = cajaBloque.move(bx, by, bz);
-                        if (cajaReal.intersects(hitboxNueva)) {
-                            return false;
-                        }
-                    }
-                }
+            if (hayColisionEnHitbox(client, hitboxIntermedia)) {
+                return false;
             }
         }
 
+        // Comprobar suelo en el destino final
         if (ticksIgnorandoSuelo == 0) {
-            BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
+            double destinoX = player.getX() + forwardX * distanciaTotal;
+            double destinoZ = player.getZ() + forwardZ * distanciaTotal;
+            double destinoY = player.getY();
+
+            BlockPos sueloNuevo = BlockPos.containing(destinoX, destinoY - 0.1, destinoZ);
             BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
             boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
 
@@ -441,6 +441,44 @@ public class AutoWalker {
         }
 
         return true;
+    }
+
+    /**
+     * Comprueba si la hitbox dada colisiona con algún bloque sólido.
+     * Ignora carteles, bloques no sólidos y bloques pisables.
+     */
+    private boolean hayColisionEnHitbox(Minecraft client, AABB hitbox) {
+        int minX = (int) Math.floor(hitbox.minX);
+        int maxX = (int) Math.floor(hitbox.maxX);
+        int minY = (int) Math.floor(hitbox.minY);
+        int maxY = (int) Math.floor(hitbox.maxY);
+        int minZ = (int) Math.floor(hitbox.minZ);
+        int maxZ = (int) Math.floor(hitbox.maxZ);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    BlockPos bpos = new BlockPos(bx, by, bz);
+                    BlockState estado = client.level.getBlockState(bpos);
+
+                    if (estado.isAir()) continue;
+                    if (esBloquePisable(client, bpos, estado)) continue;
+                    if (esBloqueNoSolido(estado)) continue;
+
+                    VoxelShape forma = estado.getCollisionShape(client.level, bpos);
+                    if (forma.isEmpty()) continue;
+
+                    for (AABB cajaBloque : forma.toAabbs()) {
+                        AABB cajaReal = cajaBloque.move(bx, by, bz);
+                        if (cajaReal.intersects(hitbox)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     private boolean hayHuecoSuficiente(Minecraft client, LocalPlayer player) {
@@ -505,55 +543,56 @@ public class AutoWalker {
         return maxBusqueda;
     }
 
+    /**
+     * Comprueba si la dirección actual es segura muestreando varios puntos
+     * a lo largo de la trayectoria y comprobando también el suelo en cada uno.
+     */
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
-        double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
-        double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
 
-        BlockPos piesDelante = BlockPos.containing(
-                player.getX() + forwardX,
-                player.getY(),
-                player.getZ() + forwardZ
-        );
-        BlockPos cabezaDelante = piesDelante.above();
-        BlockPos sueloDelante = piesDelante.below();
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
 
-        AABB hitboxDelante = new AABB(
-                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                piesDelante.getY(),
-                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
-                piesDelante.getY() + ALTURA_JUGADOR,
-                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
-        );
+        double distanciaTotal = DISTANCIA_MIRA;
 
-        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
-            return false;
-        }
+        for (int i = 1; i <= MUESTRAS_TRAYECTORIA; i++) {
+            double factor = (double) i / MUESTRAS_TRAYECTORIA;
+            double distanciaIntermedia = distanciaTotal * factor;
 
-        BlockState estadoPies = client.level.getBlockState(piesDelante);
-        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
-        if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
-            if (!esEscalable(client, piesDelante, cabezaDelante)) {
+            double checkX = player.getX() + forwardX * distanciaIntermedia;
+            double checkZ = player.getZ() + forwardZ * distanciaIntermedia;
+            double checkY = player.getY();
+
+            AABB hitbox = new AABB(
+                    checkX - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
+                    checkY,
+                    checkZ - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
+                    checkX + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
+                    checkY + ALTURA_JUGADOR,
+                    checkZ + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
+            );
+
+            if (hayColisionEnHitbox(client, hitbox)) {
                 return false;
             }
-        }
 
-        if (ticksIgnorandoSuelo == 0) {
-            BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
-            boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
+            if (zonaSegura && ticksIgnorandoSuelo == 0) {
+                BlockPos sueloCheck = BlockPos.containing(checkX, checkY - 0.1, checkZ);
+                BlockState estadoSuelo = client.level.getBlockState(sueloCheck);
+                boolean haySuelo = esBloqueCaminable(client, sueloCheck, estadoSuelo);
 
-            if (!haySuelo) {
-                int caida = 0;
-                BlockPos check = sueloDelante;
-                while (caida <= CAIDA_MAXIMA + 1) {
-                    BlockState st = client.level.getBlockState(check);
-                    if (esBloqueCaminable(client, check, st)) break;
-                    check = check.below();
-                    caida++;
-                }
-                if (caida > CAIDA_MAXIMA) {
-                    return false;
+                if (!haySuelo) {
+                    int caida = 0;
+                    BlockPos check = sueloCheck;
+                    while (caida <= CAIDA_MAXIMA + 1) {
+                        BlockState st = client.level.getBlockState(check);
+                        if (esBloqueCaminable(client, check, st)) break;
+                        check = check.below();
+                        caida++;
+                    }
+                    if (caida > CAIDA_MAXIMA) {
+                        return false;
+                    }
                 }
             }
         }
