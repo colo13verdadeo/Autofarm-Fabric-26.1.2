@@ -25,13 +25,8 @@ public class AutoWalker {
     private static final int DURACION_SALTO_TICKS = 8;
     private static final double ALTURA_PISABLE = 0.5;
 
-    /** Ticks que dura un desvío lateral antes de reintentar. */
     private static final int DURACION_DESVIO_TICKS = 15;
-
-    /** Máximo de intentos de desvío antes de rendirse. */
     private static final int MAX_INTENTOS_DESVIO = 6;
-
-    /** Ángulo de desvío respecto a la dirección al objetivo. */
     private static final float ANGULO_DESVIO = 60.0f;
 
     private boolean activo = false;
@@ -39,13 +34,9 @@ public class AutoWalker {
     private int timeoutTicks = 0;
     private int saltoTicks = 0;
 
-    /** Estado de desvío: 0 = no desviando, 1 = desviando izquierda, -1 = desviando derecha. */
     private int estadoDesvio = 0;
-    /** Ticks restantes del desvío actual. */
     private int desvioTicks = 0;
-    /** Número de intentos de desvío realizados. */
     private int intentosDesvio = 0;
-    /** Última dirección de desvío probada (para alternar). */
     private int ultimaDireccionDesvio = 1;
 
     public void iniciar(int x, int y, int z) {
@@ -87,7 +78,6 @@ public class AutoWalker {
             return;
         }
 
-        // Cancelar si el jugador pulsa movimiento manual
         if (client.options.keyDown.isDown()
                 || client.options.keyLeft.isDown()
                 || client.options.keyRight.isDown()) {
@@ -117,12 +107,23 @@ public class AutoWalker {
         // === GESTIÓN DEL DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
+
             if (desvioTicks <= 0) {
-                // Terminar desvío, volver a intentar hacia el objetivo
                 estadoDesvio = 0;
             } else {
-                // Durante el desvío, avanzar en la dirección desviada
+                // Aplicar rotación de desvío
                 aplicarRotacionDesvio(client, player, dx, dz);
+
+                // COMPROBAR SEGURIDAD en la dirección desviada ANTES de avanzar
+                if (!esDireccionSegura(client, player)) {
+                    // El desvío nos lleva a un peligro: abortar el desvío inmediatamente
+                    estadoDesvio = 0;
+                    desvioTicks = 0;
+                    player.sendSystemMessage(Component.literal(
+                            "[AutoWarp] Desvío bloqueado o peligroso. Reintentando."));
+                    return;
+                }
+
                 client.options.keyUp.setDown(true);
                 client.options.keySprint.setDown(true);
                 return;
@@ -136,7 +137,7 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === COMPROBACIÓN DE SEGURIDAD ===
+        // === COMPROBACIÓN DE SEGURIDAD HACIA EL OBJETIVO ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -158,9 +159,9 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // === 1. COLISIÓN A LA ALTURA DE LA CABEZA ===
+        // 1. Colisión cabeza
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
-            if (!iniciarDesvio(client, player)) {
+            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Obstrucción en la cabeza sin ruta alternativa. Deteniendo."));
                 detener(client);
@@ -168,7 +169,7 @@ public class AutoWalker {
             return;
         }
 
-        // === 2. COLISIÓN A LA ALTURA DE LOS PIES ===
+        // 2. Colisión pies
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
 
@@ -178,7 +179,7 @@ public class AutoWalker {
                     saltoTicks = DURACION_SALTO_TICKS;
                 }
             } else {
-                if (!iniciarDesvio(client, player)) {
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Pared sin ruta alternativa. Deteniendo navegación."));
                     detener(client);
@@ -187,7 +188,7 @@ public class AutoWalker {
             }
         }
 
-        // === 3. GESTIÓN DEL SALTO ===
+        // 3. Gestión del salto
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
@@ -199,7 +200,7 @@ public class AutoWalker {
             return;
         }
 
-        // === 4. COMPROBAR PRECIPICIO ===
+        // 4. Precipicio
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -214,7 +215,7 @@ public class AutoWalker {
             }
 
             if (caida > CAIDA_MAXIMA) {
-                if (!iniciarDesvio(client, player)) {
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Precipicio sin ruta alternativa. Deteniendo navegación."));
                     detener(client);
@@ -229,29 +230,167 @@ public class AutoWalker {
     }
 
     /**
-     * Inicia un desvío lateral para intentar rodear el obstáculo.
-     * Alterna entre izquierda y derecha. Devuelve false si ya no quedan intentos.
+     * Comprueba si la dirección actual del jugador es segura para avanzar.
+     * Es decir: no hay precipicio, no hay pared no escalable, no hay obstrucción en cabeza.
      */
-    private boolean iniciarDesvio(Minecraft client, LocalPlayer player) {
-        if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
+    private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
+        double yawRad = Math.toRadians(player.getYRot());
+        double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
+        double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
+
+        BlockPos piesDelante = BlockPos.containing(
+                player.getX() + forwardX,
+                player.getY(),
+                player.getZ() + forwardZ
+        );
+        BlockPos cabezaDelante = piesDelante.above();
+        BlockPos sueloDelante = piesDelante.below();
+
+        AABB hitboxDelante = new AABB(
+                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getY(),
+                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
+                piesDelante.getY() + ALTURA_JUGADOR,
+                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
+        );
+
+        // Cabeza bloqueada
+        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
             return false;
         }
 
-        intentosDesvio++;
-        estadoDesvio = ultimaDireccionDesvio;
-        desvioTicks = DURACION_DESVIO_TICKS;
-        ultimaDireccionDesvio = -ultimaDireccionDesvio;
+        // Pies bloqueados por algo no escalable
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
+        if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
+            if (!esEscalable(client, piesDelante, cabezaDelante)) {
+                return false;
+            }
+        }
+
+        // Precipicio
+        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
+        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
+
+        if (!haySuelo) {
+            int caida = 0;
+            BlockPos check = sueloDelante;
+            while (caida <= CAIDA_MAXIMA + 1) {
+                BlockState st = client.level.getBlockState(check);
+                if (esBloqueCaminable(client, check, st)) break;
+                check = check.below();
+                caida++;
+            }
+            if (caida > CAIDA_MAXIMA) {
+                return false;
+            }
+        }
 
         return true;
     }
 
     /**
-     * Aplica la rotación de desvío durante el avance lateral.
+     * Inicia un desvío SOLO si la dirección desviada es segura.
+     * Prueba primero un lado y, si no es seguro, el otro.
      */
+    private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
+        if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
+            return false;
+        }
+
+        float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+
+        // Probar primero el lado que toca según la alternancia
+        int ladoPrimero = ultimaDireccionDesvio;
+        int ladoSegundo = -ultimaDireccionDesvio;
+
+        if (esDireccionDesvioSegura(client, player, yawObjetivo, ladoPrimero)) {
+            intentosDesvio++;
+            estadoDesvio = ladoPrimero;
+            desvioTicks = DURACION_DESVIO_TICKS;
+            ultimaDireccionDesvio = -ladoPrimero;
+            return true;
+        }
+
+        if (esDireccionDesvioSegura(client, player, yawObjetivo, ladoSegundo)) {
+            intentosDesvio++;
+            estadoDesvio = ladoSegundo;
+            desvioTicks = DURACION_DESVIO_TICKS;
+            ultimaDireccionDesvio = -ladoSegundo;
+            return true;
+        }
+
+        // Ningún lado es seguro
+        return false;
+    }
+
+    /**
+     * Comprueba si la dirección de desvío (yaw objetivo + ángulo * lado) es segura.
+     */
+    private boolean esDireccionDesvioSegura(Minecraft client, LocalPlayer player,
+                                             float yawObjetivo, int lado) {
+        float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * lado));
+        double yawRad = Math.toRadians(yawDesviado);
+
+        double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
+        double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
+
+        BlockPos piesDelante = BlockPos.containing(
+                player.getX() + forwardX,
+                player.getY(),
+                player.getZ() + forwardZ
+        );
+        BlockPos cabezaDelante = piesDelante.above();
+        BlockPos sueloDelante = piesDelante.below();
+
+        AABB hitboxDelante = new AABB(
+                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getY(),
+                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
+                piesDelante.getY() + ALTURA_JUGADOR,
+                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
+        );
+
+        // Cabeza bloqueada
+        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
+            return false;
+        }
+
+        // Pies bloqueados por algo no escalable ni pisable
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
+        if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
+            if (!esEscalable(client, piesDelante, cabezaDelante)) {
+                return false;
+            }
+        }
+
+        // Precipicio
+        BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
+        boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
+
+        if (!haySuelo) {
+            int caida = 0;
+            BlockPos check = sueloDelante;
+            while (caida <= CAIDA_MAXIMA + 1) {
+                BlockState st = client.level.getBlockState(check);
+                if (esBloqueCaminable(client, check, st)) break;
+                check = check.below();
+                caida++;
+            }
+            if (caida > CAIDA_MAXIMA) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private void aplicarRotacionDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
-        float yawDesviado = yawObjetivo + (ANGULO_DESVIO * estadoDesvio);
-        yawDesviado = normalizarAngulo(yawDesviado);
+        float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * estadoDesvio));
 
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawDesviado - yawActual);
