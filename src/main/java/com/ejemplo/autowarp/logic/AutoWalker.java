@@ -31,6 +31,13 @@ public class AutoWalker {
 
     private static final int DURACION_RETROCESO_TICKS = 6;
 
+    /** Callback que se ejecuta al llegar al destino. */
+    public interface LlegadaCallback {
+        void onLlegada(int x, int y, int z);
+    }
+
+    private LlegadaCallback llegadaCallback;
+
     private boolean activo = false;
     private int targetX, targetY, targetZ;
     private int timeoutTicks = 0;
@@ -42,6 +49,10 @@ public class AutoWalker {
     private int ultimaDireccionDesvio = 1;
 
     private int retrocesoTicks = 0;
+
+    public void setLlegadaCallback(LlegadaCallback callback) {
+        this.llegadaCallback = callback;
+    }
 
     public void iniciar(int x, int y, int z) {
         this.activo = true;
@@ -85,29 +96,6 @@ public class AutoWalker {
             return;
         }
 
-        // === DETECCIÓN DE MOVIMIENTO MANUAL ===
-        // Solo consideramos movimiento manual si el jugador pulsa teclas que
-        // el AutoWalker NO está controlando en este momento.
-        //
-        // El AutoWalker controla:
-        // - keyUp (siempre que avanza o salta)
-        // - keySprint (siempre que avanza)
-        // - keyJump (durante un salto)
-        // - keyDown (durante un retroceso)
-        //
-        // Por tanto, solo es movimiento manual si:
-        // - keyLeft está pulsada (nunca la controlamos)
-        // - keyRight está pulsada (nunca la controlamos)
-        // - keyDown está pulsada PERO no estamos retrocediendo
-        // - keyUp está pulsada PERO no estamos avanzando por nuestra cuenta
-        //
-        // Para simplificar: comprobamos Left y Right siempre.
-        // Y comprobamos Down solo si retrocesoTicks == 0.
-        // Y comprobamos Up solo si no estamos en medio de un avance automático.
-        // Como el avance automático siempre fuerza keyUp a true, no podemos
-        // distinguirlo de un jugador pulsando W. Por eso solo miramos Left/Right,
-        // y Down si no estamos retrocediendo.
-
         boolean movimientoManual = false;
 
         if (client.options.keyLeft.isDown() || client.options.keyRight.isDown()) {
@@ -137,11 +125,14 @@ public class AutoWalker {
 
         if (distanciaHorizontal <= DISTANCIA_LLEGADA) {
             player.sendSystemMessage(Component.literal("[AutoWarp] Destino alcanzado."));
+            int fx = targetX, fy = targetY, fz = targetZ;
             detener(client);
+            if (llegadaCallback != null) {
+                llegadaCallback.onLlegada(fx, fy, fz);
+            }
             return;
         }
 
-        // === FASE DE RETROCESO (prioridad máxima) ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
             client.options.keyUp.setDown(false);
@@ -150,7 +141,6 @@ public class AutoWalker {
 
             if (retrocesoTicks <= 0) {
                 client.options.keyDown.setDown(false);
-                // Tras el retroceso, intentar desvío seguro
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Sin ruta alternativa tras retroceso. Deteniendo navegación."));
@@ -160,7 +150,6 @@ public class AutoWalker {
             return;
         }
 
-        // === GESTIÓN DEL DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
 
@@ -184,14 +173,12 @@ public class AutoWalker {
             }
         }
 
-        // === CÁLCULO DE DIRECCIÓN HACIA EL OBJETIVO ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === COMPROBACIÓN DE SEGURIDAD HACIA EL OBJETIVO ===
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -213,7 +200,6 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // 1. Colisión cabeza
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 player.sendSystemMessage(Component.literal(
@@ -223,7 +209,6 @@ public class AutoWalker {
             return;
         }
 
-        // 2. Colisión pies
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
 
@@ -242,7 +227,6 @@ public class AutoWalker {
             }
         }
 
-        // 3. Gestión del salto
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
@@ -254,7 +238,6 @@ public class AutoWalker {
             return;
         }
 
-        // 4. Precipicio
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -276,7 +259,6 @@ public class AutoWalker {
             }
         }
 
-        // Todo despejado: avanzar
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
     }

@@ -5,14 +5,17 @@ import com.ejemplo.autowarp.config.CoordStorage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
 
@@ -22,14 +25,14 @@ public class InventoryChecker {
     private static final int THROTTLE_TICKS = 2;
     private static final double DISTANCIA_MAXIMA = 500.0;
 
-    /** Ticks de espera tras el comando antes de calcular navegación (1 segundo). */
     private static final int ESPERA_POST_COMANDO_TICKS = 20;
-
-    /** Ticks extra para que los chunks terminen de cargar (medio segundo). */
     private static final int ESPERA_CARGA_CHUNKS_TICKS = 10;
+    private static final int ESPERA_CARGA_MAXIMA_TICKS = 100;
 
-    /** Ticks máximos a esperar si los chunks no cargan. */
-    private static final int ESPERA_CARGA_MAXIMA_TICKS = 100; // 5 segundos
+    /** Máximo de clics derechos al llegar al destino. */
+    private static final int MAX_INTENTOS_CLICK = 30;
+    /** Ticks entre cada clic derecho. */
+    private static final int TICKS_ENTRE_CLICKS = 10;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -37,21 +40,31 @@ public class InventoryChecker {
     private boolean enviandoComando = false;
     private int cooldownTicks = 0;
 
-    /** Contador para el delay post-comando. -1 significa inactivo. */
     private int esperaPostComandoTicks = -1;
-
-    /** Contador para el delay de carga de chunks. -1 significa inactivo. */
     private int esperaCargaChunksTicks = -1;
-
-    /** Contador total de espera por si los chunks tardan demasiado. */
     private int esperaCargaTotalTicks = 0;
 
+    // === ESTADO DE INTERACCIÓN CON EL CARTEL ===
+    private boolean esperandoMensajeError = false;
+    private int bloqueObjetivoX, bloqueObjetivoY, bloqueObjetivoZ;
+    private int intentosClick = 0;
+    private int ticksDesdeUltimoClick = 0;
+
     private final AutoWalker autoWalker = new AutoWalker();
+
+    public InventoryChecker() {
+        // Configurar el callback de llegada del AutoWalker
+        autoWalker.setLlegadaCallback(this::onLlegadaAlDestino);
+    }
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
         if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) {
             autoWalker.tick(client);
+            // Si estábamos interactuando, seguir procesando la interacción
+            if (esperandoMensajeError && client.player != null) {
+                procesarInteraccion(client, client.player);
+            }
             return;
         }
 
@@ -61,14 +74,19 @@ public class InventoryChecker {
             return;
         }
 
+        // === PRIORIDAD: interacción con el cartel ===
+        if (esperandoMensajeError) {
+            procesarInteraccion(client, player);
+            return;
+        }
+
         autoWalker.tick(client);
 
-        // === FASE 1: espera post-comando (1 segundo) ===
+        // === FASE 1: espera post-comando ===
         if (esperaPostComandoTicks >= 0) {
             esperaPostComandoTicks--;
             if (esperaPostComandoTicks <= 0) {
                 esperaPostComandoTicks = -1;
-                // Iniciar espera de carga de chunks
                 esperaCargaChunksTicks = ESPERA_CARGA_CHUNKS_TICKS;
                 esperaCargaTotalTicks = 0;
             }
@@ -132,10 +150,81 @@ public class InventoryChecker {
         }
     }
 
+    // =====================================================
+    // CALLBACK DE LLEGADA
+    // =====================================================
+
+    private void onLlegadaAlDestino(int x, int y, int z) {
+        this.esperandoMensajeError = true;
+        this.bloqueObjetivoX = x;
+        this.bloqueObjetivoY = y;
+        this.bloqueObjetivoZ = z;
+        this.intentosClick = 0;
+        this.ticksDesdeUltimoClick = 0;
+
+        Minecraft client = Minecraft.getInstance();
+        if (client.player != null) {
+            client.player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Interactuando con el cartel..."));
+        }
+    }
+
     /**
-     * Comprueba si los chunks alrededor del jugador están cargados.
-     * Verifica el chunk actual y los 8 chunks vecinos (3x3).
+     * Llamado desde el listener de chat cuando se detecta el mensaje de error.
      */
+    public void onMensajeErrorDetectado() {
+        if (esperandoMensajeError) {
+            esperandoMensajeError = false;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player != null) {
+                client.player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Mensaje de error detectado. Deteniendo interacción."));
+            }
+        }
+    }
+
+    // =====================================================
+    // INTERACCIÓN CON EL BLOQUE
+    // =====================================================
+
+    private void procesarInteraccion(Minecraft client, LocalPlayer player) {
+        if (intentosClick >= MAX_INTENTOS_CLICK) {
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] No se detectó el mensaje tras " + MAX_INTENTOS_CLICK + " intentos. Deteniendo."));
+            esperandoMensajeError = false;
+            return;
+        }
+
+        ticksDesdeUltimoClick++;
+        if (ticksDesdeUltimoClick < TICKS_ENTRE_CLICKS) {
+            return;
+        }
+        ticksDesdeUltimoClick = 0;
+        intentosClick++;
+
+        // Apuntar al bloque objetivo
+        BlockPos pos = new BlockPos(bloqueObjetivoX, bloqueObjetivoY, bloqueObjetivoZ);
+
+        // Calcular dirección desde los ojos del jugador al centro del bloque
+        Vec3 playerEye = player.getEyePosition();
+        Vec3 blockCenter = Vec3.atCenterOf(pos);
+        Vec3 direction = blockCenter.subtract(playerEye).normalize();
+
+        // Determinar la cara del bloque más cercana al jugador
+        Direction face = Direction.getNearest(direction.x, direction.y, direction.z);
+        Vec3 hitVec = blockCenter.add(Vec3.atLowerCornerOf(face.getNormal()).scale(0.5));
+
+        BlockHitResult hitResult = new BlockHitResult(hitVec, face, pos, false);
+
+        if (client.gameMode != null) {
+            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hitResult);
+        }
+    }
+
+    // =====================================================
+    // RESTO DE LÓGICA (sin cambios)
+    // =====================================================
+
     private boolean chunksCargados(Minecraft client, LocalPlayer player) {
         if (client.level == null) return false;
 
@@ -144,7 +233,7 @@ public class InventoryChecker {
 
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                LevelChunk chunk = client.level.getChunkSource()
+                var chunk = client.level.getChunkSource()
                         .getChunk(chunkX + dx, chunkZ + dz, false);
                 if (chunk == null) {
                     return false;
