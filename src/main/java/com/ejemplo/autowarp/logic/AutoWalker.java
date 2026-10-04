@@ -170,6 +170,28 @@ public class AutoWalker {
             return;
         }
 
+        // === MODO SIN ZONA SEGURA: avance directo, sin proyección ===
+        if (!zonaSegura) {
+            float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+            float yawActual = player.getYRot();
+            float diferencia = normalizarAngulo(yawObjetivo - yawActual);
+            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+            player.setYRot(yawActual + paso);
+
+            if (saltoTicks > 0) {
+                client.options.keyJump.setDown(true);
+                saltoTicks--;
+                if (saltoTicks == 0) {
+                    client.options.keyJump.setDown(false);
+                }
+            }
+
+            client.options.keyUp.setDown(true);
+            client.options.keySprint.setDown(true);
+            return;
+        }
+
+        // === MODO CON ZONA SEGURA ===
         if (esperaEntrePruebasTicks > 0) {
             esperaEntrePruebasTicks--;
             client.options.keyUp.setDown(false);
@@ -296,7 +318,7 @@ public class AutoWalker {
             }
         }
 
-        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+        if (ticksIgnorandoSuelo == 0) {
             BlockPos sueloDelante = piesDelante.below();
             BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
             boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
@@ -342,10 +364,6 @@ public class AutoWalker {
         retrocesoTicks = DURACION_RETROCESO_TICKS;
         intentosDesvio = 0;
     }
-
-    // =====================================================
-    // SIMULACIÓN
-    // =====================================================
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
@@ -396,7 +414,7 @@ public class AutoWalker {
             }
         }
 
-        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+        if (ticksIgnorandoSuelo == 0) {
             BlockPos sueloNuevo = BlockPos.containing(nuevaX, nuevaY - 0.1, nuevaZ);
             BlockState estadoSuelo = client.level.getBlockState(sueloNuevo);
             boolean haySuelo = esBloqueCaminable(client, sueloNuevo, estadoSuelo);
@@ -453,7 +471,7 @@ public class AutoWalker {
             }
         }
 
-        if (zonaSegura && ticksIgnorandoSuelo == 0) {
+        if (ticksIgnorandoSuelo == 0) {
             BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
             boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -541,10 +559,6 @@ public class AutoWalker {
         return altura < ALTURA_PISABLE;
     }
 
-    /**
-     * Determina si un bloque es no sólido (no debe considerarse obstrucción).
-     * Carteles, pancartas, antorchas y otros bloques decorativos.
-     */
     private boolean esBloqueNoSolido(BlockState estado) {
         if (estado.getBlock() instanceof SignBlock) return true;
         if (estado.is(BlockTags.BANNERS)) return true;
@@ -555,16 +569,7 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Determina si un bloque delante es escalable (saltable).
-     * Ignora carteles y bloques no sólidos en la comprobación de la cabeza.
-     *
-     * CORREGIDO: ahora un cartel encima de un bloque sólido no impide
-     * que el jugador salte ese bloque.
-     */
     private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
-        // La cabeza debe estar libre de bloques SÓLIDOS.
-        // Los carteles y similares no cuentan como obstrucción.
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
         if (!esBloqueNoSolido(estadoCabeza)
                 && !estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
@@ -573,16 +578,13 @@ public class AutoWalker {
 
         BlockState estadoPies = client.level.getBlockState(piesDelante);
 
-        // Losas: siempre escalables
         if (estadoPies.is(BlockTags.SLABS)) return true;
 
-        // Escaleras no invertidas: escalables
         if (estadoPies.getBlock() instanceof StairBlock) {
             Half half = estadoPies.getValue(StairBlock.HALF);
             return half == Half.BOTTOM;
         }
 
-        // Bloques con altura entre 0.5 y 1.0: escalables
         VoxelShape forma = estadoPies.getCollisionShape(client.level, piesDelante);
         if (forma.isEmpty()) return false;
 
