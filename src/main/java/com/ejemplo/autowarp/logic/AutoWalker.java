@@ -150,6 +150,57 @@ public class AutoWalker {
         return velocidad < UMBRAL_VELOCIDAD_QUIETO;
     }
 
+    /**
+     * Comprueba si el jugador está justo al borde de un precipicio.
+     */
+    private boolean alBordeDePrecipicio(Minecraft client, LocalPlayer player) {
+        BlockPos pies = BlockPos.containing(player.getX(), player.getY() - 0.1, player.getZ());
+        BlockState estadoPies = client.level.getBlockState(pies);
+
+        if (esBloqueCaminable(client, pies, estadoPies)) {
+            return false;
+        }
+
+        int caida = 0;
+        BlockPos check = pies;
+        while (caida <= CAIDA_MAXIMA + 1) {
+            BlockState st = client.level.getBlockState(check);
+            if (esBloqueCaminable(client, check, st)) return false;
+            check = check.below();
+            caida++;
+        }
+        return caida > CAIDA_MAXIMA;
+    }
+
+    /**
+     * Comprueba si la dirección dada apunta hacia un precipicio.
+     */
+    private boolean direccionApuntaAPrecipicio(Minecraft client, LocalPlayer player, float yaw) {
+        double yawRad = Math.toRadians(yaw);
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
+
+        double distancia = 1.5;
+        double checkX = player.getX() + forwardX * distancia;
+        double checkZ = player.getZ() + forwardZ * distancia;
+        double checkY = player.getY();
+
+        BlockPos pos = BlockPos.containing(checkX, checkY - 0.1, checkZ);
+        BlockState estado = client.level.getBlockState(pos);
+
+        if (!estado.isAir()) return false;
+
+        int caida = 0;
+        BlockPos check = pos;
+        while (caida <= CAIDA_MAXIMA + 2) {
+            BlockState st = client.level.getBlockState(check);
+            if (esBloqueCaminable(client, check, st)) return false;
+            check = check.below();
+            caida++;
+        }
+        return true;
+    }
+
     public void tick(Minecraft client) {
         if (!activo) return;
 
@@ -203,10 +254,20 @@ public class AutoWalker {
         }
 
         // === DETECCIÓN DE CAÍDA ===
-        // Si el jugador está en el aire (cayendo), no procesar navegación.
         if (!player.onGround() && saltoTicks == 0 && ticksIgnorandoSuelo == 0) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
+            return;
+        }
+
+        // === DETECCIÓN DE BORDE DE PRECIPICIO ===
+        if (alBordeDePrecipicio(client, player) && retrocesoTicks == 0) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(true);
+            retrocesoTicks = DURACION_RETROCESO_TICKS;
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Al borde de precipicio. Retrocediendo."));
             return;
         }
 
@@ -215,13 +276,8 @@ public class AutoWalker {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
             float diferencia = normalizarAngulo(yawObjetivo - yawActual);
-
-            if (Math.abs(diferencia) > 90.0f) {
-                player.setYRot(yawObjetivo);
-            } else {
-                float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-                player.setYRot(yawActual + paso);
-            }
+            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+            player.setYRot(yawActual + paso);
 
             if (saltoTicks > 0) {
                 client.options.keyJump.setDown(true);
@@ -341,14 +397,8 @@ public class AutoWalker {
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
-
-        // Rotación instantánea si la diferencia es muy grande.
-        if (Math.abs(diferencia) > 90.0f) {
-            player.setYRot(yawObjetivo);
-        } else {
-            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-            player.setYRot(yawActual + paso);
-        }
+        float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+        player.setYRot(yawActual + paso);
 
         float diferenciaRestante = Math.abs(normalizarAngulo(yawObjetivo - player.getYRot()));
         if (diferenciaRestante > UMBRAL_ALINEACION_AVANCE) {
@@ -800,6 +850,11 @@ public class AutoWalker {
                                           float yawObjetivo, int lado) {
         for (float angulo : ANGULOS_EXPLORACION) {
             float yawDesviado = normalizarAngulo(yawObjetivo + (angulo * lado));
+
+            if (direccionApuntaAPrecipicio(client, player, yawDesviado)) {
+                continue;
+            }
+
             if (esDireccionSeguraParaYaw(client, player, yawDesviado)) {
                 intentosDesvio++;
                 estadoDesvio = lado;
@@ -828,13 +883,8 @@ public class AutoWalker {
 
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawDesviado - yawActual);
-
-        if (Math.abs(diferencia) > 90.0f) {
-            player.setYRot(yawDesviado);
-        } else {
-            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-            player.setYRot(yawActual + paso);
-        }
+        float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+        player.setYRot(yawActual + paso);
     }
 
     private boolean esBloquePisable(Minecraft client, BlockPos pos, BlockState estado) {
