@@ -95,7 +95,8 @@ public final class CoordStorage {
         }
 
         if (client.level != null) {
-            return "world:" + client.level.dimension().location();
+            // ✅ CORREGIDO: identifier() en lugar de location() en 26.1
+            return "world:" + client.level.dimension().identifier();
         }
 
         return "desconocido";
