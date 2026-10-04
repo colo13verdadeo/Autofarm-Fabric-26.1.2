@@ -24,9 +24,9 @@ public class AutoWalker {
     private static final Logger LOGGER = LoggerFactory.getLogger("AutoWarp");
 
     private static final double DISTANCIA_LLEGADA = 0.5;
-    private static final double VELOCIDAD_ROTACION = 15.0;
+    private static final double VELOCIDAD_ROTACION = 30.0;
     private static final int TIMEOUT_MAX = 20 * 120;
-    private static final double DISTANCIA_MIRA = 1.5;
+    private static final double DISTANCIA_MIRA = 2.0;
     private static final int CAIDA_MAXIMA = 1;
 
     private static final double ALTURA_JUGADOR = 1.8;
@@ -41,7 +41,7 @@ public class AutoWalker {
 
     private static final int DURACION_RETROCESO_TICKS = 6;
 
-    private static final double DISTANCIA_SIMULACION = 0.5;
+    private static final double DISTANCIA_SIMULACION = 1.0;
 
     private static final int MUESTRAS_TRAYECTORIA = 5;
 
@@ -52,7 +52,6 @@ public class AutoWalker {
     private static final float UMBRAL_ALINEACION_AVANCE = 10.0f;
     private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
 
-    /** Umbral de velocidad para considerar que el jugador está quieto. */
     private static final double UMBRAL_VELOCIDAD_QUIETO = 0.05;
 
     private static final float[] ANGULOS_EXPLORACION = {
@@ -85,7 +84,6 @@ public class AutoWalker {
 
     private int esperaEntrePruebasTicks = 0;
 
-    /** Contador de ticks esperando a que el jugador se detenga. */
     private int esperaQuieto = 0;
 
     private boolean zonaSegura = true;
@@ -145,11 +143,6 @@ public class AutoWalker {
         return activo;
     }
 
-    /**
-     * Comprueba si el jugador está prácticamente quieto.
-     * Se usa antes de hacer simulaciones para asegurar que la posición
-     * no cambia entre la comprobación y el avance.
-     */
     private boolean jugadorQuieto(LocalPlayer player) {
         double vx = player.getX() - player.xOld;
         double vz = player.getZ() - player.zOld;
@@ -209,13 +202,26 @@ public class AutoWalker {
             return;
         }
 
+        // === DETECCIÓN DE CAÍDA ===
+        // Si el jugador está en el aire (cayendo), no procesar navegación.
+        if (!player.onGround() && saltoTicks == 0 && ticksIgnorandoSuelo == 0) {
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            return;
+        }
+
         // === MODO SIN ZONA SEGURA ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
             float diferencia = normalizarAngulo(yawObjetivo - yawActual);
-            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-            player.setYRot(yawActual + paso);
+
+            if (Math.abs(diferencia) > 90.0f) {
+                player.setYRot(yawObjetivo);
+            } else {
+                float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+                player.setYRot(yawActual + paso);
+            }
 
             if (saltoTicks > 0) {
                 client.options.keyJump.setDown(true);
@@ -335,8 +341,14 @@ public class AutoWalker {
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
-        float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-        player.setYRot(yawActual + paso);
+
+        // Rotación instantánea si la diferencia es muy grande.
+        if (Math.abs(diferencia) > 90.0f) {
+            player.setYRot(yawObjetivo);
+        } else {
+            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+            player.setYRot(yawActual + paso);
+        }
 
         float diferenciaRestante = Math.abs(normalizarAngulo(yawObjetivo - player.getYRot()));
         if (diferenciaRestante > UMBRAL_ALINEACION_AVANCE) {
@@ -563,10 +575,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Devuelve una descripción del primer bloque o entidad que colisiona
-     * con la hitbox dada. Se usa para los logs de debug.
-     */
     private String describirBloqueQueColisiona(Minecraft client, AABB hitbox) {
         int minX = (int) Math.floor(hitbox.minX);
         int maxX = (int) Math.floor(hitbox.maxX);
@@ -621,10 +629,6 @@ public class AutoWalker {
         return "desconocido";
     }
 
-    /**
-     * Comprueba si hay entidades con colisión (marcos, cuadros, botes, etc.)
-     * intersectando con la hitbox dada.
-     */
     private boolean hayEntidadBloqueando(Minecraft client, AABB hitbox) {
         if (client.level == null) return false;
 
@@ -824,8 +828,13 @@ public class AutoWalker {
 
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawDesviado - yawActual);
-        float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
-        player.setYRot(yawActual + paso);
+
+        if (Math.abs(diferencia) > 90.0f) {
+            player.setYRot(yawDesviado);
+        } else {
+            float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
+            player.setYRot(yawActual + paso);
+        }
     }
 
     private boolean esBloquePisable(Minecraft client, BlockPos pos, BlockState estado) {
