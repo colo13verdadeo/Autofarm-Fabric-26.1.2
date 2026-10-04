@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -559,7 +560,17 @@ public class AutoWalker {
         return altura < ALTURA_PISABLE;
     }
 
+    /**
+     * Determina si un bloque es no sólido (no debe considerarse obstrucción).
+     * Carteles, pancartas, antorchas y otros bloques decorativos.
+     *
+     * IMPORTANTE: El bloque barrera (Barrier) NO es no sólido. Aunque sea
+     * invisible, tiene caja de colisión completa y bloquea el paso.
+     */
     private boolean esBloqueNoSolido(BlockState estado) {
+        // La barrera NO es no sólida: debe bloquear como un bloque normal.
+        if (estado.is(Blocks.BARRIER)) return false;
+
         if (estado.getBlock() instanceof SignBlock) return true;
         if (estado.is(BlockTags.BANNERS)) return true;
         if (estado.is(BlockTags.ALL_SIGNS)) return true;
