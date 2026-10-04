@@ -381,7 +381,6 @@ public class AutoWalker {
 
                     if (estado.isAir()) continue;
                     if (esBloquePisable(client, bpos, estado)) continue;
-                    // Excluir carteles y bloques no sólidos
                     if (esBloqueNoSolido(estado)) continue;
 
                     VoxelShape forma = estado.getCollisionShape(client.level, bpos);
@@ -547,35 +546,43 @@ public class AutoWalker {
      * Carteles, pancartas, antorchas y otros bloques decorativos.
      */
     private boolean esBloqueNoSolido(BlockState estado) {
-        // Carteles (de pie y de pared)
         if (estado.getBlock() instanceof SignBlock) return true;
-        // Pancartas
         if (estado.is(BlockTags.BANNERS)) return true;
-        // Carteles colgantes
         if (estado.is(BlockTags.ALL_SIGNS)) return true;
-        // Vallas (fence gates): no bloquean si están abiertas
         if (estado.is(BlockTags.FENCE_GATES)) return true;
-        // Velas
         if (estado.is(BlockTags.CANDLES)) return true;
         if (estado.is(BlockTags.CANDLE_CAKES)) return true;
         return false;
     }
 
+    /**
+     * Determina si un bloque delante es escalable (saltable).
+     * Ignora carteles y bloques no sólidos en la comprobación de la cabeza.
+     *
+     * CORREGIDO: ahora un cartel encima de un bloque sólido no impide
+     * que el jugador salte ese bloque.
+     */
     private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
+        // La cabeza debe estar libre de bloques SÓLIDOS.
+        // Los carteles y similares no cuentan como obstrucción.
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
-        if (!estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
+        if (!esBloqueNoSolido(estadoCabeza)
+                && !estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
             return false;
         }
 
         BlockState estadoPies = client.level.getBlockState(piesDelante);
 
+        // Losas: siempre escalables
         if (estadoPies.is(BlockTags.SLABS)) return true;
 
+        // Escaleras no invertidas: escalables
         if (estadoPies.getBlock() instanceof StairBlock) {
             Half half = estadoPies.getValue(StairBlock.HALF);
             return half == Half.BOTTOM;
         }
 
+        // Bloques con altura entre 0.5 y 1.0: escalables
         VoxelShape forma = estadoPies.getCollisionShape(client.level, piesDelante);
         if (forma.isEmpty()) return false;
 
@@ -588,7 +595,6 @@ public class AutoWalker {
 
         if (estado.isAir()) return false;
 
-        // Excluir bloques no sólidos
         if (esBloqueNoSolido(estado)) return false;
 
         VoxelShape forma = estado.getCollisionShape(client.level, pos);
