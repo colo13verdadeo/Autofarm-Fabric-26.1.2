@@ -28,7 +28,6 @@ public class AutoWalker {
 
     private static final int DURACION_DESVIO_TICKS = 15;
     private static final int MAX_INTENTOS_DESVIO = 6;
-    private static final float ANGULO_DESVIO = 60.0f;
 
     private static final int DURACION_RETROCESO_TICKS = 6;
 
@@ -36,8 +35,16 @@ public class AutoWalker {
 
     private static final int MAX_PRUEBAS_FALLIDAS = 11;
 
-    /** Ticks de espera entre pruebas fallidas (0.5 segundos). */
     private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
+
+    /**
+     * Ángulos de exploración lateral en grados respecto a la dirección al objetivo.
+     * Se prueban en orden: primero los más suaves, luego los más pronunciados.
+     * Cubre hasta 150° en cada lado para permitir rodear obstáculos grandes.
+     */
+    private static final float[] ANGULOS_EXPLORACION = {
+            30.0f, 60.0f, 90.0f, 120.0f, 150.0f
+    };
 
     public interface LlegadaCallback {
         void onLlegada(int x, int y, int z);
@@ -55,11 +62,13 @@ public class AutoWalker {
     private int intentosDesvio = 0;
     private int ultimaDireccionDesvio = 1;
 
+    /** Ángulo actual del desvío en curso. */
+    private float anguloDesvioActual = 0f;
+
     private int retrocesoTicks = 0;
 
     private int pruebasFallidas = 0;
 
-    /** Ticks restantes de espera entre pruebas. 0 = no esperando. */
     private int esperaEntrePruebasTicks = 0;
 
     public void setLlegadaCallback(LlegadaCallback callback) {
@@ -77,6 +86,7 @@ public class AutoWalker {
         this.desvioTicks = 0;
         this.intentosDesvio = 0;
         this.ultimaDireccionDesvio = 1;
+        this.anguloDesvioActual = 0f;
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
@@ -91,6 +101,7 @@ public class AutoWalker {
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
+        this.anguloDesvioActual = 0f;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -151,17 +162,15 @@ public class AutoWalker {
             return;
         }
 
-        // === FASE DE ESPERA ENTRE PRUEBAS (prioridad sobre retroceso y desvío) ===
+        // === ESPERA ENTRE PRUEBAS ===
         if (esperaEntrePruebasTicks > 0) {
             esperaEntrePruebasTicks--;
-            // Asegurar que no hay teclas forzadas durante la espera
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyDown.setDown(false);
             client.options.keyJump.setDown(false);
 
             if (esperaEntrePruebasTicks <= 0) {
-                // Terminada la espera: reintentar desvío desde posición segura
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                     registrarPruebaFallida(client, player);
                 }
@@ -169,7 +178,7 @@ public class AutoWalker {
             return;
         }
 
-        // === FASE DE RETROCESO ===
+        // === RETROCESO ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
             client.options.keyUp.setDown(false);
@@ -178,18 +187,18 @@ public class AutoWalker {
 
             if (retrocesoTicks <= 0) {
                 client.options.keyDown.setDown(false);
-                // Tras el retroceso, esperar 0.5 segundos antes de reintentar
                 esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
             }
             return;
         }
 
-        // === GESTIÓN DEL DESVÍO ACTIVO ===
+        // === DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
 
             if (desvioTicks <= 0) {
                 estadoDesvio = 0;
+                anguloDesvioActual = 0f;
                 pruebasFallidas = 0;
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
@@ -197,6 +206,7 @@ public class AutoWalker {
                 if (!esDireccionSegura(client, player)) {
                     estadoDesvio = 0;
                     desvioTicks = 0;
+                    anguloDesvioActual = 0f;
                     retrocesoTicks = DURACION_RETROCESO_TICKS;
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Desvío peligroso. Retrocediendo."));
@@ -206,6 +216,7 @@ public class AutoWalker {
                 if (!simularAvanceSeguro(client, player)) {
                     estadoDesvio = 0;
                     desvioTicks = 0;
+                    anguloDesvioActual = 0f;
                     retrocesoTicks = DURACION_RETROCESO_TICKS;
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Desvío bloqueado. Retrocediendo."));
@@ -218,14 +229,14 @@ public class AutoWalker {
             }
         }
 
-        // === CÁLCULO DE DIRECCIÓN HACIA EL OBJETIVO ===
+        // === DIRECCIÓN HACIA EL OBJETIVO ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === SIMULACIÓN DE AVANCE ===
+        // === SIMULACIÓN ===
         if (!simularAvanceSeguro(client, player)) {
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 registrarPruebaFallida(client, player);
@@ -233,7 +244,7 @@ public class AutoWalker {
             return;
         }
 
-        // === GESTIÓN DEL SALTO ===
+        // === SALTO ===
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
@@ -282,7 +293,7 @@ public class AutoWalker {
             }
         }
 
-        // === COMPROBAR PRECIPICIO ===
+        // === PRECIPICIO ===
         BlockPos sueloDelante = piesDelante.below();
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
@@ -305,17 +316,11 @@ public class AutoWalker {
             }
         }
 
-        // === AVANCE EXITOSO ===
         pruebasFallidas = 0;
-
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
     }
 
-    /**
-     * Registra una prueba fallida. Si se alcanzan las MAX_PRUEBAS_FALLIDAS,
-     * detiene la navegación definitivamente. Si no, retrocede para reintentar.
-     */
     private void registrarPruebaFallida(Minecraft client, LocalPlayer player) {
         pruebasFallidas++;
 
@@ -335,7 +340,7 @@ public class AutoWalker {
     }
 
     // =====================================================
-    // SIMULACIÓN DE MOVIMIENTO
+    // SIMULACIÓN
     // =====================================================
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
@@ -461,6 +466,10 @@ public class AutoWalker {
         return true;
     }
 
+    /**
+     * Explora múltiples ángulos a ambos lados hasta encontrar uno seguro.
+     * Prioriza los ángulos suaves primero. Alterna el lado inicial.
+     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
             return false;
@@ -471,29 +480,41 @@ public class AutoWalker {
         int ladoPrimero = ultimaDireccionDesvio;
         int ladoSegundo = -ultimaDireccionDesvio;
 
-        if (esDireccionDesvioSegura(client, player, yawObjetivo, ladoPrimero)) {
-            intentosDesvio++;
-            estadoDesvio = ladoPrimero;
-            desvioTicks = DURACION_DESVIO_TICKS;
-            ultimaDireccionDesvio = -ladoPrimero;
+        // Probar primero el lado alternado, luego el otro
+        if (probarAngulosEnLado(client, player, yawObjetivo, ladoPrimero)) {
             return true;
         }
-
-        if (esDireccionDesvioSegura(client, player, yawObjetivo, ladoSegundo)) {
-            intentosDesvio++;
-            estadoDesvio = ladoSegundo;
-            desvioTicks = DURACION_DESVIO_TICKS;
-            ultimaDireccionDesvio = -ladoSegundo;
+        if (probarAngulosEnLado(client, player, yawObjetivo, ladoSegundo)) {
             return true;
         }
 
         return false;
     }
 
-    private boolean esDireccionDesvioSegura(Minecraft client, LocalPlayer player,
-                                             float yawObjetivo, int lado) {
-        float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * lado));
+    /**
+     * Prueba todos los ángulos de exploración en un lado concreto.
+     * Si encuentra uno seguro, inicia el desvío.
+     */
+    private boolean probarAngulosEnLado(Minecraft client, LocalPlayer player,
+                                          float yawObjetivo, int lado) {
+        for (float angulo : ANGULOS_EXPLORACION) {
+            float yawDesviado = normalizarAngulo(yawObjetivo + (angulo * lado));
+            if (esDireccionSeguraParaYaw(client, player, yawDesviado)) {
+                intentosDesvio++;
+                estadoDesvio = lado;
+                desvioTicks = DURACION_DESVIO_TICKS;
+                anguloDesvioActual = angulo;
+                ultimaDireccionDesvio = -lado;
+                return true;
+            }
+        }
+        return false;
+    }
 
+    /**
+     * Comprueba si la dirección indicada por yawDesviado es segura.
+     */
+    private boolean esDireccionSeguraParaYaw(Minecraft client, LocalPlayer player, float yawDesviado) {
         float yawOriginal = player.getYRot();
         player.setYRot(yawDesviado);
 
@@ -505,7 +526,7 @@ public class AutoWalker {
 
     private void aplicarRotacionDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
-        float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * estadoDesvio));
+        float yawDesviado = normalizarAngulo(yawObjetivo + (anguloDesvioActual * estadoDesvio));
 
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawDesviado - yawActual);

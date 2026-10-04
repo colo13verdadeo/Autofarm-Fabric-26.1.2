@@ -22,6 +22,10 @@ public class AutoWarpScreen extends Screen {
     private int scrollOffset = 0;
 
     private EditBox comandoBox;
+    private EditBox comandoPostBox;
+
+    private int labelComandoY = 0;
+    private int labelComandoPostY = 0;
 
     public AutoWarpScreen() {
         super(Component.literal("Auto-Warp - Configuración"));
@@ -36,9 +40,6 @@ public class AutoWarpScreen extends Screen {
         int buttonWidth = 240;
         int buttonHeight = 20;
 
-        // =====================================================
-        // COLUMNA IZQUIERDA: Opciones de configuración
-        // =====================================================
         int leftX = centerX - buttonWidth - 10;
         int y = 40;
 
@@ -52,7 +53,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // Checkeo inventario lleno on/off
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Chequeo lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")),
@@ -63,7 +63,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // Segundos inventario lleno
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Segundos lleno: " + cfg.segundosInventarioLleno + "s"),
@@ -74,7 +73,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // Cooldown en segundos
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Cooldown: " + cfg.segundosCooldown + "s"),
@@ -93,7 +91,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // Mensajes overlay
         y += 25;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mensajes T1/T2/T3: " + (cfg.mostrarMensajesOverlay ? "SÍ" : "NO")),
@@ -104,17 +101,14 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // --- Etiqueta + EditBox del comando ---
+        // Comando principal
         y += 30;
-        // Etiqueta dibujada en extractRenderState en "y - 12"
-        int labelY = y;
+        labelComandoY = y;
 
         this.comandoBox = new EditBox(
                 this.font,
-                leftX,
-                labelY + 12,
-                buttonWidth,
-                buttonHeight,
+                leftX, labelComandoY + 12,
+                buttonWidth, buttonHeight,
                 Component.literal("Comando")
         );
         this.comandoBox.setValue(cfg.comandoWarp);
@@ -125,15 +119,27 @@ public class AutoWarpScreen extends Screen {
         });
         this.addRenderableWidget(this.comandoBox);
 
-        // Guardar la Y de la etiqueta para dibujarla
-        this.labelComandoY = labelY;
+        // Comando post-carteles
+        y += 40;
+        labelComandoPostY = y;
 
-        // =====================================================
-        // COLUMNA DERECHA: Carteles
-        // =====================================================
+        this.comandoPostBox = new EditBox(
+                this.font,
+                leftX, labelComandoPostY + 12,
+                buttonWidth, buttonHeight,
+                Component.literal("Comando post-carteles")
+        );
+        this.comandoPostBox.setValue(cfg.comandoPostCarteles);
+        this.comandoPostBox.setMaxLength(128);
+        this.comandoPostBox.setResponder(val -> {
+            cfg.comandoPostCarteles = val;
+            AutoWarpConfig.save();
+        });
+        this.addRenderableWidget(this.comandoPostBox);
+
+        // Columna derecha: carteles
         int rightX = centerX + 10;
 
-        // Botón: Añadir cartel
         this.addRenderableWidget(Button.builder(
                 Component.literal("Añadir cartel que estoy mirando"),
                 btn -> {
@@ -143,9 +149,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(rightX, 40, buttonWidth, buttonHeight).build());
 
-        // =====================================================
-        // Botón volver (centrado abajo)
-        // =====================================================
         this.addRenderableWidget(Button.builder(
                 Component.literal("Volver"),
                 btn -> Minecraft.getInstance().setScreen(null)
@@ -153,8 +156,6 @@ public class AutoWarpScreen extends Screen {
 
         refrescarLista();
     }
-
-    private int labelComandoY = 0;
 
     private void refrescarLista() {
         coordsMostradas.clear();
@@ -168,13 +169,20 @@ public class AutoWarpScreen extends Screen {
 
         graphics.centeredText(this.font, this.title, this.width / 2, 15, 0xFFFFFFFF);
 
-        // Etiqueta del comando (dibujada 12px arriba del EditBox)
+        int leftX = this.width / 2 - 240 - 10;
+
+        // Etiquetas de los comandos
         graphics.text(this.font,
-                "Comando a ejecutar:",
-                this.width / 2 - 240 - 10, labelComandoY,
+                "Comando principal:",
+                leftX, labelComandoY,
                 0xFFAAAAAA, true);
 
-        // Título de la lista de carteles
+        graphics.text(this.font,
+                "Comando post-carteles:",
+                leftX, labelComandoPostY,
+                0xFFAAAAAA, true);
+
+        // Lista de carteles
         String contexto = CoordStorage.getNombreContextoActual();
         graphics.text(this.font,
                 "Carteles en: " + contexto,

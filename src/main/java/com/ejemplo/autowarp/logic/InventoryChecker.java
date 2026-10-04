@@ -42,13 +42,11 @@ public class InventoryChecker {
     private int esperaCargaChunksTicks = -1;
     private int esperaCargaTotalTicks = 0;
 
-    // === ESTADO DE INTERACCIÓN CON EL CARTEL ===
     private boolean esperandoMensajeError = false;
     private int bloqueObjetivoX, bloqueObjetivoY, bloqueObjetivoZ;
     private int intentosClick = 0;
     private int ticksDesdeUltimoClick = 0;
 
-    /** Cartel que estamos procesando actualmente (para marcarlo como sin stock). */
     private CoordStorage.Coordenada cartelActual = null;
 
     private final AutoWalker autoWalker = new AutoWalker();
@@ -167,7 +165,7 @@ public class InventoryChecker {
 
     /**
      * Llamado desde el listener de chat cuando se detecta "Error: You do not have".
-     * NO es un error: significa que el cartel está vacío. Saltamos al siguiente.
+     * NO es un error: el cartel está vacío. Saltamos al siguiente.
      */
     public void onMensajeErrorDetectado() {
         if (!esperandoMensajeError) return;
@@ -178,7 +176,6 @@ public class InventoryChecker {
         LocalPlayer player = client.player;
 
         if (cartelActual != null) {
-            // Marcar el cartel como sin stock en esta sesión
             CoordStorage.marcarSinStock(cartelActual);
             if (player != null) {
                 player.sendSystemMessage(Component.literal(
@@ -188,19 +185,17 @@ public class InventoryChecker {
 
         cartelActual = null;
 
-        // Detener el AutoWalker si sigue activo (por seguridad)
         if (autoWalker.estaActivo()) {
             autoWalker.detener(client);
         }
 
-        // Buscar el siguiente cartel y navegar hacia él
         if (player != null) {
             intentarNavegacion(player);
         }
     }
 
     // =====================================================
-    // INTERACCIÓN CON EL BLOQUE
+    // INTERACCIÓN
     // =====================================================
 
     private void procesarInteraccion(Minecraft client, LocalPlayer player) {
@@ -261,7 +256,7 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // RESTO DE LÓGICA
+    // RESTO
     // =====================================================
 
     private boolean chunksCargados(Minecraft client, LocalPlayer player) {
@@ -316,10 +311,29 @@ public class InventoryChecker {
             cooldownTicks = cfg.segundosCooldown * TICKS_POR_SEGUNDO;
             esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
         } catch (Exception e) {
-            // Silenciar errores
+            // Silenciar
         } finally {
             resetear();
             enviandoComando = false;
+        }
+    }
+
+    /**
+     * Ejecuta el comando post-carteles cuando no quedan carteles disponibles.
+     */
+    private void ejecutarComandoPostCarteles(Minecraft client, LocalPlayer player) {
+        AutoWarpConfig cfg = AutoWarpConfig.get();
+        if (cfg == null) return;
+
+        String cmd = cfg.comandoPostCarteles;
+        if (cmd == null || cmd.isEmpty()) return;
+
+        if (cmd.startsWith("/")) cmd = cmd.substring(1);
+
+        if (client.getConnection() != null) {
+            client.getConnection().sendCommand(cmd);
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] No quedan carteles. Ejecutando: /" + cmd));
         }
     }
 
@@ -327,13 +341,13 @@ public class InventoryChecker {
         List<CoordStorage.Coordenada> lista = CoordStorage.getCoordenadasActuales();
 
         if (lista.isEmpty()) {
+            ejecutarComandoPostCarteles(Minecraft.getInstance(), player);
             return;
         }
 
         CoordStorage.Coordenada elegida = null;
 
         for (CoordStorage.Coordenada cartel : lista) {
-            // Saltar carteles marcados como sin stock en esta sesión
             if (CoordStorage.estaSinStock(cartel)) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Cartel " + cartel + " marcado sin stock. Saltando."));
@@ -390,7 +404,8 @@ public class InventoryChecker {
 
         if (elegida == null) {
             player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Ningún cartel cumple las condiciones para navegar."));
+                    "[AutoWarp] Ningún cartel cumple las condiciones. Ejecutando comando post-carteles."));
+            ejecutarComandoPostCarteles(Minecraft.getInstance(), player);
             return;
         }
 
