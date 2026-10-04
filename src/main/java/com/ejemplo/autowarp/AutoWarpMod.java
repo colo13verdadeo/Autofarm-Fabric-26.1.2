@@ -29,11 +29,11 @@ public class AutoWarpMod implements ClientModInitializer {
         AutoWarpConfig.load();
         CoordStorage.cargar();
 
-        // Tecla para abrir la pantalla: P
+        // Tecla para abrir la pantalla: U
         abrirConfigKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.autowarp.abrir_config",
                 InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_P,
+                GLFW.GLFW_KEY_U,
                 CATEGORY
         ));
 
