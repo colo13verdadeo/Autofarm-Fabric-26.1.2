@@ -19,7 +19,6 @@ public class AutoWarpMod implements ClientModInitializer {
 
     private static KeyMapping abrirConfigKey;
 
-    // Categoría de tecla
     private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(
             Identifier.fromNamespaceAndPath(MOD_ID, "autowarp")
     );
@@ -29,7 +28,6 @@ public class AutoWarpMod implements ClientModInitializer {
         AutoWarpConfig.load();
         CoordStorage.cargar();
 
-        // Tecla para abrir la pantalla: U
         abrirConfigKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.autowarp.abrir_config",
                 InputConstants.Type.KEYSYM,

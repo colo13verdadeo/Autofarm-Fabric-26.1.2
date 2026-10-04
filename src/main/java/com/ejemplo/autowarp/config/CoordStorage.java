@@ -11,7 +11,6 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -32,15 +31,11 @@ public final class CoordStorage {
             FabricLoader.getInstance().getConfigDir().resolve("autowarp");
     private static final Path ARCHIVO = CARPETA.resolve("coordenadas.json");
 
-    /** clave (mundo/servidor) -> lista de coordenadas */
     private static Map<String, List<Coordenada>> datos = new HashMap<>();
-
-    /** Coordenada pendiente de asignar ítem (captura en curso). */
     private static Coordenada capturaPendiente = null;
 
     public static class Coordenada {
         public int x, y, z;
-        /** ID del ítem asociado (puede ser null). */
         public String itemId;
 
         public Coordenada() {}
@@ -115,13 +110,9 @@ public final class CoordStorage {
     }
 
     // =====================================================
-    // CAPTURA DE CARTEL (en dos pasos)
+    // CAPTURA DE CARTEL
     // =====================================================
 
-    /**
-     * Paso 1: verifica que el bloque mirado sea un cartel y guarda la coordenada
-     * como captura pendiente. Devuelve true si hay que abrir la pantalla de búsqueda.
-     */
     public static boolean prepararCapturaCartel() {
         Minecraft client = Minecraft.getInstance();
         if (client.player == null || client.level == null) return false;
@@ -147,9 +138,6 @@ public final class CoordStorage {
         return true;
     }
 
-    /**
-     * Paso 2: asigna el ítem seleccionado a la captura pendiente y la guarda.
-     */
     public static void confirmarCapturaConItem(Item item) {
         if (capturaPendiente == null) return;
 
@@ -195,7 +183,7 @@ public final class CoordStorage {
     }
 
     // =====================================================
-    // ELIMINAR COORDENADA
+    // ELIMINAR / CONSULTAR
     // =====================================================
 
     public static void eliminarCoordenada(Coordenada coord) {
@@ -207,15 +195,39 @@ public final class CoordStorage {
         }
     }
 
-    // =====================================================
-    // CONSULTAS
-    // =====================================================
-
     public static List<Coordenada> getCoordenadasActuales() {
         return datos.getOrDefault(getClaveContextoActual(), Collections.emptyList());
     }
 
     public static String getNombreContextoActual() {
         return getClaveContextoActual();
+    }
+
+    /**
+     * Busca la coordenada registrada más cercana al jugador actual.
+     */
+    public static Coordenada getCartelMasCercano() {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null) return null;
+
+        List<Coordenada> lista = getCoordenadasActuales();
+        if (lista.isEmpty()) return null;
+
+        double px = client.player.getX();
+        double pz = client.player.getZ();
+
+        Coordenada mejor = null;
+        double mejorDist = Double.MAX_VALUE;
+
+        for (Coordenada c : lista) {
+            double dx = c.x - px;
+            double dz = c.z - pz;
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < mejorDist) {
+                mejorDist = dist;
+                mejor = c;
+            }
+        }
+        return mejor;
     }
 }
