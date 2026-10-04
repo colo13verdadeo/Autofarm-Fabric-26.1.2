@@ -1,0 +1,62 @@
+name: Build Autofarm
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.4.1'
+
+      # 1. Leer el último release y calcular la siguiente versión
+      - name: Calculate next version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(gh release view --json tagName -q .tagName 2>/dev/null || echo "v0.0.1")
+          echo "Último release: $LATEST"
+
+          MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+          MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+          PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
+
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT="v${MAJOR}.${MINOR}.${NEXT_PATCH}"
+
+          echo "Siguiente versión: $NEXT"
+          echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "plain_version=${MAJOR}.${MINOR}.${NEXT_PATCH}" >> "$GITHUB_OUTPUT"
+
+      # 2. Compilar pasando la versión a Gradle
+      - name: Build
+        run: gradle clean build --no-daemon --stacktrace -Pmod_version=${{ steps.version.outputs.plain_version }}
+
+      # 3. Crear el release con el tag calculado
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.next_version }}
+          name: ${{ steps.version.outputs.next_version }}
+          generate_release_notes: true
+          files: build/libs/*.jar
+          fail_on_unmatched_files: true
