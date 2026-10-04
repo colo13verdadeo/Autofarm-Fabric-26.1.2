@@ -1,6 +1,5 @@
 package com.ejemplo.autowarp.logic;
 
-import com.ejemplo.autowarp.config.AutoWarpConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -68,8 +67,18 @@ public class AutoWalker {
 
     private int esperaEntrePruebasTicks = 0;
 
+    /**
+     * Zona segura específica de esta instancia de AutoWalker.
+     * Cada instancia (carteles o post-carteles) tiene su propio valor.
+     */
+    private boolean zonaSegura = true;
+
     public void setLlegadaCallback(LlegadaCallback callback) {
         this.llegadaCallback = callback;
+    }
+
+    public void setZonaSegura(boolean valor) {
+        this.zonaSegura = valor;
     }
 
     public void iniciar(int x, int y, int z) {
@@ -291,9 +300,6 @@ public class AutoWalker {
             }
         }
 
-        AutoWarpConfig cfg = AutoWarpConfig.get();
-        boolean zonaSegura = cfg == null || cfg.zonaSegura;
-
         if (zonaSegura && ticksIgnorandoSuelo == 0) {
             BlockPos sueloDelante = piesDelante.below();
             BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
@@ -341,14 +347,7 @@ public class AutoWalker {
         intentosDesvio = 0;
     }
 
-    // =====================================================
-    // SIMULACIÓN
-    // =====================================================
-
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
-        AutoWarpConfig cfg = AutoWarpConfig.get();
-        boolean zonaSegura = cfg == null || cfg.zonaSegura;
-
         double yawRad = Math.toRadians(player.getYRot());
 
         double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
@@ -420,9 +419,6 @@ public class AutoWalker {
     }
 
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
-        AutoWarpConfig cfg = AutoWarpConfig.get();
-        boolean zonaSegura = cfg == null || cfg.zonaSegura;
-
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
         double forwardZ = Math.cos(yawRad) * DISTANCIA_MIRA;
@@ -584,11 +580,6 @@ public class AutoWalker {
         return false;
     }
 
-    /**
-     * Determina si un bloque es caminable (suelo firme o losa inferior).
-     * Usa la altura de colisión para detectar losas y bloques parciales.
-     * Método restaurado: faltaba en la versión anterior.
-     */
     private boolean esBloqueCaminable(Minecraft client, BlockPos pos, BlockState estado) {
         if (estado.isAir()) return false;
 

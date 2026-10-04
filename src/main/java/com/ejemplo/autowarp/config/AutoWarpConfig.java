@@ -26,12 +26,24 @@ public final class AutoWarpConfig {
 
     public String comandoPostCarteles = "visit kfcblock";
 
-    /**
-     * Si está activado, el AutoWalker aplica protección contra precipicios
-     * y obstáculos no escalables. Si está desactivado, navega directo
-     * rodeando obstáculos pero puede caer por precipicios.
-     */
-    public boolean zonaSegura = true;
+    // === ZONA SEGURA INDEPENDIENTE ===
+    /** Zona segura durante el recorrido de carteles. */
+    public boolean zonaSeguraCarteles = true;
+    /** Zona segura durante el viaje a la ubicación de autofarm (post-carteles). */
+    public boolean zonaSeguraPostCarteles = true;
+
+    // === AUTOFARM ===
+    /** Si está activado, tras /visit kfcblock navega a la ubicación de autofarm. */
+    public boolean autofarmActivado = false;
+
+    /** Posición capturada de autofarm. */
+    public double autofarmX = 0;
+    public double autofarmY = 0;
+    public double autofarmZ = 0;
+    /** Ángulo de visión (yaw) capturado. */
+    public float autofarmYaw = 0;
+    /** Indica si ya se ha capturado una posición. */
+    public boolean autofarmCapturado = false;
 
     private static AutoWarpConfig INSTANCE = new AutoWarpConfig();
 

@@ -41,7 +41,7 @@ public class AutoWarpScreen extends Screen {
         int buttonHeight = 20;
 
         int leftX = centerX - buttonWidth - 10;
-        int y = 40;
+        int y = 30;
 
         // Mod on/off
         this.addRenderableWidget(Button.builder(
@@ -53,7 +53,7 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        y += 25;
+        y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Chequeo lleno: " + (cfg.checkeoActivo ? "ACTIVADO" : "DESACTIVADO")),
                 btn -> {
@@ -63,7 +63,7 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        y += 25;
+        y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Segundos lleno: " + cfg.segundosInventarioLleno + "s"),
                 btn -> {
@@ -73,7 +73,7 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        y += 25;
+        y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Cooldown: " + cfg.segundosCooldown + "s"),
                 btn -> {
@@ -91,7 +91,7 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        y += 25;
+        y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mensajes T1/T2/T3: " + (cfg.mostrarMensajesOverlay ? "SÍ" : "NO")),
                 btn -> {
@@ -101,19 +101,74 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === NUEVO: Zona segura ===
-        y += 25;
+        // === ZONA SEGURA CARTELES ===
+        y += 22;
         this.addRenderableWidget(Button.builder(
-                Component.literal("Zona segura: " + (cfg.zonaSegura ? "SÍ" : "NO")),
+                Component.literal("Zona segura carteles: " + (cfg.zonaSeguraCarteles ? "SÍ" : "NO")),
                 btn -> {
-                    cfg.zonaSegura = !cfg.zonaSegura;
+                    cfg.zonaSeguraCarteles = !cfg.zonaSeguraCarteles;
                     AutoWarpConfig.save();
-                    btn.setMessage(Component.literal("Zona segura: " + (cfg.zonaSegura ? "SÍ" : "NO")));
+                    btn.setMessage(Component.literal("Zona segura carteles: " + (cfg.zonaSeguraCarteles ? "SÍ" : "NO")));
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
+        // === ZONA SEGURA POST-CARTELES ===
+        y += 22;
+        this.addRenderableWidget(Button.builder(
+                Component.literal("Zona segura post: " + (cfg.zonaSeguraPostCarteles ? "SÍ" : "NO")),
+                btn -> {
+                    cfg.zonaSeguraPostCarteles = !cfg.zonaSeguraPostCarteles;
+                    AutoWarpConfig.save();
+                    btn.setMessage(Component.literal("Zona segura post: " + (cfg.zonaSeguraPostCarteles ? "SÍ" : "NO")));
+                }
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
+
+        // === AUTOFARM ACTIVADO ===
+        y += 22;
+        this.addRenderableWidget(Button.builder(
+                Component.literal("Autofarm: " + (cfg.autofarmActivado ? "ACTIVADO" : "DESACTIVADO")),
+                btn -> {
+                    cfg.autofarmActivado = !cfg.autofarmActivado;
+                    AutoWarpConfig.save();
+                    btn.setMessage(Component.literal("Autofarm: " + (cfg.autofarmActivado ? "ACTIVADO" : "DESACTIVADO")));
+                }
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
+
+        // === CAPTURAR POSICIÓN AUTOFARM ===
+        y += 22;
+        this.addRenderableWidget(Button.builder(
+                Component.literal("Capturar posición autofarm"),
+                btn -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.player != null) {
+                        cfg.autofarmX = mc.player.getX();
+                        cfg.autofarmY = mc.player.getY();
+                        cfg.autofarmZ = mc.player.getZ();
+                        cfg.autofarmYaw = mc.player.getYRot();
+                        cfg.autofarmCapturado = true;
+                        AutoWarpConfig.save();
+                        mc.player.sendSystemMessage(Component.literal(
+                                "[AutoWarp] Posición capturada: ("
+                                + (int) cfg.autofarmX + ", "
+                                + (int) cfg.autofarmY + ", "
+                                + (int) cfg.autofarmZ + ") Yaw: "
+                                + (int) cfg.autofarmYaw));
+                    }
+                }
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
+
+        // === INDICADOR DE POSICIÓN CAPTURADA ===
+        y += 22;
+        String textoPos = cfg.autofarmCapturado
+                ? "Pos: (" + (int) cfg.autofarmX + ", " + (int) cfg.autofarmY + ", " + (int) cfg.autofarmZ + ") Yaw " + (int) cfg.autofarmYaw
+                : "Pos: (sin capturar)";
+        this.addRenderableWidget(Button.builder(
+                Component.literal(textoPos),
+                btn -> { /* informativo, no hace nada */ }
+        ).bounds(leftX, y, buttonWidth, buttonHeight).build());
+
         // Comando principal
-        y += 30;
+        y += 25;
         labelComandoY = y;
 
         this.comandoBox = new EditBox(
@@ -158,7 +213,7 @@ public class AutoWarpScreen extends Screen {
                         Minecraft.getInstance().setScreen(new ItemSearchScreen());
                     }
                 }
-        ).bounds(rightX, 40, buttonWidth, buttonHeight).build());
+        ).bounds(rightX, 30, buttonWidth, buttonHeight).build());
 
         this.addRenderableWidget(Button.builder(
                 Component.literal("Volver"),
@@ -178,7 +233,7 @@ public class AutoWarpScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
 
-        graphics.centeredText(this.font, this.title, this.width / 2, 15, 0xFFFFFFFF);
+        graphics.centeredText(this.font, this.title, this.width / 2, 10, 0xFFFFFFFF);
 
         int leftX = this.width / 2 - 240 - 10;
 
@@ -195,11 +250,11 @@ public class AutoWarpScreen extends Screen {
         String contexto = CoordStorage.getNombreContextoActual();
         graphics.text(this.font,
                 "Carteles en: " + contexto,
-                this.width / 2 + 10, 70,
+                this.width / 2 + 10, 60,
                 0xFFAAAAAA, true);
 
         int startX = this.width / 2 + 10;
-        int startY = 85;
+        int startY = 75;
         int end = Math.min(scrollOffset + ROWS, coordsMostradas.size());
 
         for (int i = scrollOffset; i < end; i++) {
@@ -222,7 +277,7 @@ public class AutoWarpScreen extends Screen {
         double mouseY = event.y();
 
         int startX = this.width / 2 + 10;
-        int startY = 85;
+        int startY = 75;
 
         if (mouseX >= startX + 215 && mouseX <= startX + 245) {
             for (int i = scrollOffset; i < Math.min(scrollOffset + ROWS, coordsMostradas.size()); i++) {
