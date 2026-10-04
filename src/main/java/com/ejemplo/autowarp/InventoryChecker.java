@@ -11,7 +11,7 @@ public class InventoryChecker {
 
     private static final int TICKS_POR_SEGUNDO = 20;
     private static final int TIEMPO_ESPERA = 3 * TICKS_POR_SEGUNDO;
-    private static final int THROTTLE_TICKS = 2; // revisar cada 2 ticks para precisión
+    private static final int THROTTLE_TICKS = 2;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -29,7 +29,6 @@ public class InventoryChecker {
             return;
         }
 
-        // Throttle: no revisar cada tick, sino cada N ticks
         throttleCounter++;
         if (throttleCounter < THROTTLE_TICKS) {
             return;
@@ -50,7 +49,8 @@ public class InventoryChecker {
             int tickEnSegundo = contadorTicks % TICKS_POR_SEGUNDO;
 
             if (tickEnSegundo == THROTTLE_TICKS && segundoActual >= 1 && segundoActual <= 3) {
-                player.displayClientMessage(Component.literal("T" + segundoActual), false);
+                // ✅ Aviso superpuesto, solo visible para el cliente
+                player.sendOverlayMessage(Component.literal("T" + segundoActual));
             }
 
             if (contadorTicks >= TIEMPO_ESPERA) {
@@ -63,7 +63,7 @@ public class InventoryChecker {
 
     /**
      * Verifica si los 36 slots del inventario principal están ocupados.
-     * Usa menu.slots filtrando por container == playerInventory, igual que ItemDropper.
+     * Filtra por container == playerInventory para ignorar cofres abiertos.
      */
     private boolean estaInventarioLleno(LocalPlayer player) {
         var menu = player.containerMenu;
@@ -76,7 +76,7 @@ public class InventoryChecker {
             if (slot.container != playerInventory) continue;
 
             int slotIndex = slot.index;
-            // Los 36 slots del inventario principal (hotbar + mochila) van del 9 al 44
+            // Los 36 slots del inventario principal van del 9 al 44
             if (slotIndex < 9 || slotIndex > 44) continue;
 
             slotsInventario++;
@@ -87,12 +87,11 @@ public class InventoryChecker {
             }
         }
 
-        // Si los 36 slots están ocupados, el inventario está lleno
         return slotsInventario == 36 && slotsOcupados == 36;
     }
 
     /**
-     * Envía /warp shop. Para comandos de chat se usa getConnection().sendCommand().
+     * Envía /warp shop al servidor como si el jugador lo hubiera escrito.
      */
     private void ejecutarComando(Minecraft client, LocalPlayer player) {
         enviandoComando = true;
