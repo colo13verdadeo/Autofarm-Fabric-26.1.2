@@ -27,6 +27,9 @@ public class AutoWalker {
     private static final int DURACION_SALTO_TICKS = 8;
     private static final double ALTURA_PISABLE = 0.5;
 
+    /** Margen lateral de seguridad para detectar pasillos estrechos (vallas, etc.). */
+    private static final double MARGEN_LATERAL = 0.15;
+
     private static final int DURACION_DESVIO_TICKS = 15;
     private static final int MAX_INTENTOS_DESVIO = 6;
 
@@ -171,7 +174,7 @@ public class AutoWalker {
             return;
         }
 
-        // === MODO SIN ZONA SEGURA: avance directo, sin proyección ===
+        // === MODO SIN ZONA SEGURA: avance directo ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
@@ -366,7 +369,16 @@ public class AutoWalker {
         intentosDesvio = 0;
     }
 
+    // =====================================================
+    // SIMULACIÓN
+    // =====================================================
+
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
+        // === NUEVO: COMPROBAR HUECO LATERAL PRIMERO ===
+        if (!hayHuecoSuficiente(client, player)) {
+            return false;
+        }
+
         double yawRad = Math.toRadians(player.getYRot());
 
         double forwardX = -Math.sin(yawRad) * DISTANCIA_SIMULACION;
@@ -377,12 +389,12 @@ public class AutoWalker {
         double nuevaZ = player.getZ() + forwardZ;
 
         AABB hitboxNueva = new AABB(
-                nuevaX - ANCHO_JUGADOR / 2,
+                nuevaX - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
                 nuevaY,
-                nuevaZ - ANCHO_JUGADOR / 2,
-                nuevaX + ANCHO_JUGADOR / 2,
+                nuevaZ - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
+                nuevaX + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
                 nuevaY + ALTURA_JUGADOR,
-                nuevaZ + ANCHO_JUGADOR / 2
+                nuevaZ + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
         );
 
         int minX = (int) Math.floor(hitboxNueva.minX);
@@ -438,6 +450,72 @@ public class AutoWalker {
         return true;
     }
 
+    /**
+     * Comprueba si el hueco lateral en la dirección de avance es suficiente
+     * para que el jugador pase. Detecta pasillos estrechos formados por
+     * bloques sólidos a los costados (vallas, muros, etc.).
+     *
+     * Devuelve true si hay al menos ANCHO_JUGADOR + MARGEN_LATERAL de espacio libre.
+     */
+    private boolean hayHuecoSuficiente(Minecraft client, LocalPlayer player) {
+        double yawRad = Math.toRadians(player.getYRot());
+
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
+
+        double lateralX = forwardZ;
+        double lateralZ = -forwardX;
+
+        double distanciaComprobacion = DISTANCIA_SIMULACION;
+        double centerX = player.getX() + forwardX * distanciaComprobacion;
+        double centerZ = player.getZ() + forwardZ * distanciaComprobacion;
+        double playerY = player.getY();
+
+        double huecoIzquierda = buscarBloqueLateral(client, centerX, centerZ, playerY,
+                -lateralX, -lateralZ);
+        double huecoDerecha = buscarBloqueLateral(client, centerX, centerZ, playerY,
+                lateralX, lateralZ);
+
+        double huecoTotal = huecoIzquierda + huecoDerecha;
+
+        return huecoTotal >= ANCHO_JUGADOR + MARGEN_LATERAL;
+    }
+
+    /**
+     * Busca la distancia hasta el primer bloque sólido en la dirección lateral dada.
+     * Devuelve la distancia máxima de búsqueda si no encuentra nada.
+     */
+    private double buscarBloqueLateral(Minecraft client, double centerX, double centerZ,
+                                        double centerY, double dirX, double dirZ) {
+        double maxBusqueda = 1.5;
+        double paso = 0.1;
+
+        for (double d = 0.3; d <= maxBusqueda; d += paso) {
+            double x = centerX + dirX * d;
+            double z = centerZ + dirZ * d;
+
+            for (double dy = 0; dy < ALTURA_JUGADOR; dy += 0.5) {
+                BlockPos pos = BlockPos.containing(x, centerY + dy, z);
+                BlockState estado = client.level.getBlockState(pos);
+
+                if (estado.isAir()) continue;
+                if (esBloqueNoSolido(estado)) continue;
+                if (esBloquePisable(client, pos, estado)) continue;
+
+                VoxelShape forma = estado.getCollisionShape(client.level, pos);
+                if (forma.isEmpty()) continue;
+
+                AABB cajaBloque = forma.bounds().move(pos.getX(), pos.getY(), pos.getZ());
+                if (cajaBloque.minX <= x && cajaBloque.maxX >= x
+                        && cajaBloque.minZ <= z && cajaBloque.maxZ >= z) {
+                    return d;
+                }
+            }
+        }
+
+        return maxBusqueda;
+    }
+
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
@@ -452,12 +530,12 @@ public class AutoWalker {
         BlockPos sueloDelante = piesDelante.below();
 
         AABB hitboxDelante = new AABB(
-                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
                 piesDelante.getY(),
-                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
-                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
+                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
+                piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
                 piesDelante.getY() + ALTURA_JUGADOR,
-                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
+                piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
         );
 
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
@@ -560,15 +638,7 @@ public class AutoWalker {
         return altura < ALTURA_PISABLE;
     }
 
-    /**
-     * Determina si un bloque es no sólido (no debe considerarse obstrucción).
-     * Carteles, pancartas, antorchas y otros bloques decorativos.
-     *
-     * IMPORTANTE: El bloque barrera (Barrier) NO es no sólido. Aunque sea
-     * invisible, tiene caja de colisión completa y bloquea el paso.
-     */
     private boolean esBloqueNoSolido(BlockState estado) {
-        // La barrera NO es no sólida: debe bloquear como un bloque normal.
         if (estado.is(Blocks.BARRIER)) return false;
 
         if (estado.getBlock() instanceof SignBlock) return true;
