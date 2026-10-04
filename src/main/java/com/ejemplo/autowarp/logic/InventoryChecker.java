@@ -210,15 +210,40 @@ public class InventoryChecker {
         Vec3 blockCenter = Vec3.atCenterOf(pos);
         Vec3 direction = blockCenter.subtract(playerEye).normalize();
 
-        // Determinar la cara del bloque más cercana al jugador
-        Direction face = Direction.getNearest(direction.x, direction.y, direction.z);
-        Vec3 hitVec = blockCenter.add(Vec3.atLowerCornerOf(face.getNormal()).scale(0.5));
+        // ✅ CORREGIDO: getNearest requiere int, int, int (y opcionalmente Direction)
+        // Redondeamos las componentes y determinamos la cara dominante manualmente.
+        Direction face = getCaraMasCercana(direction);
+
+        // ✅ CORREGIDO: getNormal() ya no existe. Usamos el desplazamiento manual.
+        double offsetX = face.getStepX() * 0.5;
+        double offsetY = face.getStepY() * 0.5;
+        double offsetZ = face.getStepZ() * 0.5;
+
+        Vec3 hitVec = blockCenter.add(offsetX, offsetY, offsetZ);
 
         BlockHitResult hitResult = new BlockHitResult(hitVec, face, pos, false);
 
         if (client.gameMode != null) {
             client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hitResult);
         }
+    }
+
+    /**
+     * Determina la cara del bloque más cercana al vector de dirección dado.
+     * Equivalente a Direction.getNearest pero sin depender de la API cambiada.
+     */
+    private Direction getCaraMasCercana(Vec3 dir) {
+        double ax = Math.abs(dir.x);
+        double ay = Math.abs(dir.y);
+        double az = Math.abs(dir.z);
+
+        if (ax >= ay && ax >= az) {
+            return dir.x > 0 ? Direction.EAST : Direction.WEST;
+        }
+        if (ay >= ax && ay >= az) {
+            return dir.y > 0 ? Direction.UP : Direction.DOWN;
+        }
+        return dir.z > 0 ? Direction.SOUTH : Direction.NORTH;
     }
 
     // =====================================================
