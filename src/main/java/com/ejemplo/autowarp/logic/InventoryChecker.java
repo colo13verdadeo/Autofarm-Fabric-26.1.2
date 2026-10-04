@@ -153,11 +153,11 @@ public class InventoryChecker {
         }
     }
 
-    private void onLlegadaAlDestino(int x, int y, int z) {
+    private void onLlegadaAlDestino(double x, double y, double z) {
         this.esperandoMensajeError = true;
-        this.bloqueObjetivoX = x;
-        this.bloqueObjetivoY = y;
-        this.bloqueObjetivoZ = z;
+        this.bloqueObjetivoX = (int) Math.floor(x);
+        this.bloqueObjetivoY = (int) Math.floor(y);
+        this.bloqueObjetivoZ = (int) Math.floor(z);
         this.intentosClick = 0;
         this.ticksDesdeUltimoClick = 0;
 
@@ -168,13 +168,15 @@ public class InventoryChecker {
         }
     }
 
-    private void onLlegadaAutofarm(int x, int y, int z) {
+    private void onLlegadaAutofarm(double x, double y, double z) {
         Minecraft client = Minecraft.getInstance();
         AutoWarpConfig cfg = AutoWarpConfig.get();
 
         if (client.player != null) {
+            // Aplicar yaw (horizontal) y pitch (vertical) capturados
             if (cfg != null && cfg.autofarmCapturado) {
                 client.player.setYRot(cfg.autofarmYaw);
+                client.player.setXRot(cfg.autofarmPitch);
             }
             client.player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Autofarm alcanzado. Navegación finalizada."));
@@ -360,12 +362,10 @@ public class InventoryChecker {
             if (cfg != null && cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Navegando a la ubicación de autofarm ("
-                        + (int) cfg.autofarmX + ", " + (int) cfg.autofarmY + ", " + (int) cfg.autofarmZ + ")."));
-                autoWalkerAutofarm.iniciar(
-                        (int) Math.round(cfg.autofarmX),
-                        (int) Math.round(cfg.autofarmY),
-                        (int) Math.round(cfg.autofarmZ)
-                );
+                        + String.format("%.2f", cfg.autofarmX) + ", "
+                        + String.format("%.2f", cfg.autofarmY) + ", "
+                        + String.format("%.2f", cfg.autofarmZ) + ")."));
+                autoWalkerAutofarm.iniciar(cfg.autofarmX, cfg.autofarmY, cfg.autofarmZ);
                 return;
             }
         }

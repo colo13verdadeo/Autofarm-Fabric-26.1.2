@@ -33,27 +33,23 @@ public final class CoordStorage {
 
     private static Map<String, List<Coordenada>> datos = new HashMap<>();
     private static Coordenada capturaPendiente = null;
-
-    /**
-     * Carteles marcados como "sin stock" en la sesión actual.
-     * Se guardan por su posición (x,y,z) para evitar repetir la interacción.
-     * Se resetean al reiniciar el juego.
-     */
     private static final Set<String> sinStockSesion = new HashSet<>();
 
     public static class Coordenada {
-        public int x, y, z;
+        public double x, y, z;
         public String itemId;
 
         public Coordenada() {}
 
-        public Coordenada(int x, int y, int z) {
+        public Coordenada(double x, double y, double z) {
             this.x = x; this.y = y; this.z = z;
         }
 
         @Override
         public String toString() {
-            String base = "(" + x + ", " + y + ", " + z + ")";
+            String base = "(" + String.format("%.2f", x) + ", "
+                    + String.format("%.2f", y) + ", "
+                    + String.format("%.2f", z) + ")";
             if (itemId != null && !itemId.isEmpty()) {
                 base += " → " + itemId;
             }
@@ -61,7 +57,7 @@ public final class CoordStorage {
         }
 
         public String getClavePosicion() {
-            return x + "," + y + "," + z;
+            return String.format("%.2f,%.2f,%.2f", x, y, z);
         }
     }
 
@@ -124,17 +120,14 @@ public final class CoordStorage {
     // MARCAS DE SESIÓN
     // =====================================================
 
-    /** Marca un cartel como "sin stock" en la sesión actual. */
     public static void marcarSinStock(Coordenada coord) {
         sinStockSesion.add(coord.getClavePosicion());
     }
 
-    /** Comprueba si un cartel está marcado como "sin stock" en la sesión. */
     public static boolean estaSinStock(Coordenada coord) {
         return sinStockSesion.contains(coord.getClavePosicion());
     }
 
-    /** Limpia las marcas de sesión. Se llama al entrar a un mundo/servidor distinto. */
     public static void limpiarMarcasSesion() {
         sinStockSesion.clear();
     }
@@ -182,9 +175,9 @@ public final class CoordStorage {
         datos.computeIfAbsent(clave, k -> new ArrayList<>());
 
         boolean existe = datos.get(clave).stream()
-                .anyMatch(c -> c.x == capturaPendiente.x
-                        && c.y == capturaPendiente.y
-                        && c.z == capturaPendiente.z);
+                .anyMatch(c -> Math.abs(c.x - capturaPendiente.x) < 0.01
+                        && Math.abs(c.y - capturaPendiente.y) < 0.01
+                        && Math.abs(c.z - capturaPendiente.z) < 0.01);
 
         Minecraft client = Minecraft.getInstance();
         if (existe) {

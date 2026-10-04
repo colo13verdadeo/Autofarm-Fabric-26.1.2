@@ -16,7 +16,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 public class AutoWalker {
 
-    private static final double DISTANCIA_LLEGADA = 0.8;
+    private static final double DISTANCIA_LLEGADA = 0.5;
     private static final double VELOCIDAD_ROTACION = 15.0;
     private static final int TIMEOUT_MAX = 20 * 120;
     private static final double DISTANCIA_MIRA = 1.5;
@@ -45,13 +45,13 @@ public class AutoWalker {
     };
 
     public interface LlegadaCallback {
-        void onLlegada(int x, int y, int z);
+        void onLlegada(double x, double y, double z);
     }
 
     private LlegadaCallback llegadaCallback;
 
     private boolean activo = false;
-    private int targetX, targetY, targetZ;
+    private double targetX, targetY, targetZ;
     private int timeoutTicks = 0;
     private int saltoTicks = 0;
 
@@ -80,7 +80,7 @@ public class AutoWalker {
         this.zonaSegura = valor;
     }
 
-    public void iniciar(int x, int y, int z) {
+    public void iniciar(double x, double y, double z) {
         this.activo = true;
         this.targetX = x;
         this.targetY = y;
@@ -159,13 +159,14 @@ public class AutoWalker {
             return;
         }
 
-        double dx = targetX + 0.5 - player.getX();
-        double dz = targetZ + 0.5 - player.getZ();
+        // Objetivo ahora es la coordenada decimal exacta (sin +0.5)
+        double dx = targetX - player.getX();
+        double dz = targetZ - player.getZ();
         double distanciaHorizontal = Math.sqrt(dx * dx + dz * dz);
 
         if (distanciaHorizontal <= DISTANCIA_LLEGADA) {
             player.sendSystemMessage(Component.literal("[AutoWarp] Destino alcanzado."));
-            int fx = targetX, fy = targetY, fz = targetZ;
+            double fx = targetX, fy = targetY, fz = targetZ;
             detener(client);
             if (llegadaCallback != null) {
                 llegadaCallback.onLlegada(fx, fy, fz);
@@ -263,11 +264,7 @@ public class AutoWalker {
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // === SIMULACIÓN DE AVANCE ===
         if (!simularAvanceSeguro(client, player)) {
-            // Primero intentar desviar (todos los ángulos disponibles).
-            // Solo si ningún desvío funciona, comprobar si es pasillo estrecho
-            // (que se informa al usuario, pero igualmente registra fallo).
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 if (!hayHuecoSuficiente(client, player)) {
                     player.sendSystemMessage(Component.literal(
@@ -373,10 +370,6 @@ public class AutoWalker {
         retrocesoTicks = DURACION_RETROCESO_TICKS;
         intentosDesvio = 0;
     }
-
-    // =====================================================
-    // SIMULACIÓN
-    // =====================================================
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());

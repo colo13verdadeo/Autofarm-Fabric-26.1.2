@@ -43,7 +43,6 @@ public class AutoWarpScreen extends Screen {
         int leftX = centerX - buttonWidth - 10;
         int y = 30;
 
-        // Mod on/off
         this.addRenderableWidget(Button.builder(
                 Component.literal("Mod: " + (cfg.modActivado ? "ACTIVADO" : "DESACTIVADO")),
                 btn -> {
@@ -101,7 +100,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === ZONA SEGURA CARTELES ===
         y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Zona segura carteles: " + (cfg.zonaSeguraCarteles ? "SÍ" : "NO")),
@@ -112,7 +110,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === ZONA SEGURA POST-CARTELES ===
         y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Zona segura post: " + (cfg.zonaSeguraPostCarteles ? "SÍ" : "NO")),
@@ -123,7 +120,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === AUTOFARM ACTIVADO ===
         y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Autofarm: " + (cfg.autofarmActivado ? "ACTIVADO" : "DESACTIVADO")),
@@ -134,7 +130,6 @@ public class AutoWarpScreen extends Screen {
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === CAPTURAR POSICIÓN AUTOFARM ===
         y += 22;
         this.addRenderableWidget(Button.builder(
                 Component.literal("Capturar posición autofarm"),
@@ -145,29 +140,31 @@ public class AutoWarpScreen extends Screen {
                         cfg.autofarmY = mc.player.getY();
                         cfg.autofarmZ = mc.player.getZ();
                         cfg.autofarmYaw = mc.player.getYRot();
+                        cfg.autofarmPitch = mc.player.getXRot();
                         cfg.autofarmCapturado = true;
                         AutoWarpConfig.save();
                         mc.player.sendSystemMessage(Component.literal(
                                 "[AutoWarp] Posición capturada: ("
-                                + (int) cfg.autofarmX + ", "
-                                + (int) cfg.autofarmY + ", "
-                                + (int) cfg.autofarmZ + ") Yaw: "
-                                + (int) cfg.autofarmYaw));
+                                + String.format("%.2f", cfg.autofarmX) + ", "
+                                + String.format("%.2f", cfg.autofarmY) + ", "
+                                + String.format("%.2f", cfg.autofarmZ) + ") "
+                                + "Yaw: " + String.format("%.1f", cfg.autofarmYaw)
+                                + " Pitch: " + String.format("%.1f", cfg.autofarmPitch)));
                     }
                 }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // === INDICADOR DE POSICIÓN CAPTURADA ===
         y += 22;
         String textoPos = cfg.autofarmCapturado
-                ? "Pos: (" + (int) cfg.autofarmX + ", " + (int) cfg.autofarmY + ", " + (int) cfg.autofarmZ + ") Yaw " + (int) cfg.autofarmYaw
+                ? "Pos: (" + String.format("%.2f", cfg.autofarmX) + ", "
+                    + String.format("%.2f", cfg.autofarmY) + ", "
+                    + String.format("%.2f", cfg.autofarmZ) + ")"
                 : "Pos: (sin capturar)";
         this.addRenderableWidget(Button.builder(
                 Component.literal(textoPos),
-                btn -> { /* informativo, no hace nada */ }
+                btn -> { /* informativo */ }
         ).bounds(leftX, y, buttonWidth, buttonHeight).build());
 
-        // Comando principal
         y += 25;
         labelComandoY = y;
 
@@ -185,7 +182,6 @@ public class AutoWarpScreen extends Screen {
         });
         this.addRenderableWidget(this.comandoBox);
 
-        // Comando post-carteles
         y += 40;
         labelComandoPostY = y;
 
@@ -203,7 +199,6 @@ public class AutoWarpScreen extends Screen {
         });
         this.addRenderableWidget(this.comandoPostBox);
 
-        // Columna derecha
         int rightX = centerX + 10;
 
         this.addRenderableWidget(Button.builder(
@@ -237,21 +232,12 @@ public class AutoWarpScreen extends Screen {
 
         int leftX = this.width / 2 - 240 - 10;
 
-        graphics.text(this.font,
-                "Comando principal:",
-                leftX, labelComandoY,
-                0xFFAAAAAA, true);
-
-        graphics.text(this.font,
-                "Comando post-carteles:",
-                leftX, labelComandoPostY,
-                0xFFAAAAAA, true);
+        graphics.text(this.font, "Comando principal:", leftX, labelComandoY, 0xFFAAAAAA, true);
+        graphics.text(this.font, "Comando post-carteles:", leftX, labelComandoPostY, 0xFFAAAAAA, true);
 
         String contexto = CoordStorage.getNombreContextoActual();
-        graphics.text(this.font,
-                "Carteles en: " + contexto,
-                this.width / 2 + 10, 60,
-                0xFFAAAAAA, true);
+        graphics.text(this.font, "Carteles en: " + contexto,
+                this.width / 2 + 10, 60, 0xFFAAAAAA, true);
 
         int startX = this.width / 2 + 10;
         int startY = 75;
