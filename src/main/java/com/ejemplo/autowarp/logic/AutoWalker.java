@@ -13,8 +13,12 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class AutoWalker {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("AutoWarp");
 
     private static final double DISTANCIA_LLEGADA = 0.5;
     private static final double VELOCIDAD_ROTACION = 15.0;
@@ -36,7 +40,6 @@ public class AutoWalker {
 
     private static final double DISTANCIA_SIMULACION = 0.5;
 
-    /** Número de muestras a lo largo de la trayectoria simulada. */
     private static final int MUESTRAS_TRAYECTORIA = 5;
 
     private static final int MAX_PRUEBAS_FALLIDAS = 11;
@@ -74,6 +77,10 @@ public class AutoWalker {
     private int esperaEntrePruebasTicks = 0;
 
     private boolean zonaSegura = true;
+
+    private void debug(String mensaje) {
+        LOGGER.info("[DEBUG] " + mensaje);
+    }
 
     public void setLlegadaCallback(LlegadaCallback callback) {
         this.llegadaCallback = callback;
@@ -235,6 +242,12 @@ public class AutoWalker {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
                 if (!esDireccionSegura(client, player)) {
+                    debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot())
+                            + " EstadoDesvio=" + estadoDesvio
+                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual)
+                            + " Pos=(" + String.format("%.2f", player.getX()) + ", "
+                            + String.format("%.2f", player.getY()) + ", "
+                            + String.format("%.2f", player.getZ()) + ")");
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -245,6 +258,12 @@ public class AutoWalker {
                 }
 
                 if (!simularAvanceSeguro(client, player)) {
+                    debug("DESVÍO BLOQUEADO activado. Yaw=" + String.format("%.1f", player.getYRot())
+                            + " EstadoDesvio=" + estadoDesvio
+                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual)
+                            + " Pos=(" + String.format("%.2f", player.getX()) + ", "
+                            + String.format("%.2f", player.getY()) + ", "
+                            + String.format("%.2f", player.getZ()) + ")");
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -377,11 +396,6 @@ public class AutoWalker {
     // SIMULACIÓN
     // =====================================================
 
-    /**
-     * Simula el avance del jugador muestreando varios puntos intermedios
-     * entre la posición actual y la futura. Así se detectan colisiones
-     * que ocurrirían en el trayecto, no solo en el destino final.
-     */
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -398,7 +412,6 @@ public class AutoWalker {
             double checkY = player.getY();
             double checkZ = player.getZ() + forwardZ * distanciaIntermedia;
 
-            // El margen lateral solo en la última muestra (destino final)
             double margen = (i == MUESTRAS_TRAYECTORIA) ? MARGEN_LATERAL : 0.0;
 
             AABB hitboxIntermedia = new AABB(
@@ -411,11 +424,16 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitboxIntermedia)) {
+                debug("simularAvanceSeguro FALSA: colisión en muestra " + i + "/"
+                        + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
+                        + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
+                        + " Pos=(" + String.format("%.2f", checkX) + ", "
+                        + String.format("%.2f", checkY) + ", "
+                        + String.format("%.2f", checkZ) + ")");
                 return false;
             }
         }
 
-        // Comprobar suelo en el destino final
         if (ticksIgnorandoSuelo == 0) {
             double destinoX = player.getX() + forwardX * distanciaTotal;
             double destinoZ = player.getZ() + forwardZ * distanciaTotal;
@@ -435,6 +453,10 @@ public class AutoWalker {
                     caida++;
                 }
                 if (caida > CAIDA_MAXIMA) {
+                    debug("simularAvanceSeguro FALSA: precipicio al destino. Caída=" + caida
+                            + " Pos=(" + String.format("%.2f", destinoX) + ", "
+                            + String.format("%.2f", destinoY) + ", "
+                            + String.format("%.2f", destinoZ) + ")");
                     return false;
                 }
             }
@@ -443,10 +465,6 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Comprueba si la hitbox dada colisiona con algún bloque sólido.
-     * Ignora carteles, bloques no sólidos y bloques pisables.
-     */
     private boolean hayColisionEnHitbox(Minecraft client, AABB hitbox) {
         int minX = (int) Math.floor(hitbox.minX);
         int maxX = (int) Math.floor(hitbox.maxX);
@@ -543,10 +561,6 @@ public class AutoWalker {
         return maxBusqueda;
     }
 
-    /**
-     * Comprueba si la dirección actual es segura muestreando varios puntos
-     * a lo largo de la trayectoria y comprobando también el suelo en cada uno.
-     */
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
 
@@ -573,6 +587,12 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitbox)) {
+                debug("esDireccionSegura FALSA: colisión en muestra " + i + "/"
+                        + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
+                        + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
+                        + " Pos=(" + String.format("%.2f", checkX) + ", "
+                        + String.format("%.2f", checkY) + ", "
+                        + String.format("%.2f", checkZ) + ")");
                 return false;
             }
 
@@ -591,6 +611,12 @@ public class AutoWalker {
                         caida++;
                     }
                     if (caida > CAIDA_MAXIMA) {
+                        debug("esDireccionSegura FALSA: precipicio en muestra " + i + "/"
+                                + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
+                                + " bloques. Caída=" + caida
+                                + " Pos=(" + String.format("%.2f", checkX) + ", "
+                                + String.format("%.2f", checkY) + ", "
+                                + String.format("%.2f", checkZ) + ")");
                         return false;
                     }
                 }
