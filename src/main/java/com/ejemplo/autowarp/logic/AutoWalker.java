@@ -9,7 +9,6 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Half;
-import net.minecraft.world.level.block.state.properties.StairsShape;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
@@ -27,11 +26,16 @@ public class AutoWalker {
     /** Duración del salto forzado en ticks. */
     private static final int DURACION_SALTO_TICKS = 8;
 
+    /**
+     * Altura mínima de colisión para considerarla un obstáculo real.
+     * Por debajo de este valor, el bloque se pisa sin problema (alfombras,
+     * placas de presión, caminos de tierra, etc.).
+     */
+    private static final double ALTURA_PISABLE = 0.5;
+
     private boolean activo = false;
     private int targetX, targetY, targetZ;
     private int timeoutTicks = 0;
-
-    /** Contador de salto en curso. 0 = no saltando. */
     private int saltoTicks = 0;
 
     public void iniciar(int x, int y, int z) {
@@ -124,24 +128,22 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // 1. Colisión a la altura de los pies
-        boolean colisionPies = colisionaConBloque(client, piesDelante, hitboxDelante);
-
-        // 2. Colisión a la altura de la cabeza
-        boolean colisionCabeza = colisionaConBloque(client, cabezaDelante, hitboxDelante);
-
-        // Si hay colisión en la cabeza, siempre detenerse (no se puede saltar)
-        if (colisionCabeza) {
+        // === 1. COLISIÓN A LA ALTURA DE LA CABEZA ===
+        if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Obstrucción a la altura de la cabeza. Deteniendo navegación."));
             detener(client);
             return;
         }
 
-        // Si hay colisión en los pies, intentar saltar si es un obstáculo escalable
-        if (colisionPies) {
+        // === 2. COLISIÓN A LA ALTURA DE LOS PIES ===
+        // Pero antes, comprobar si el bloque delantero es pisable (altura < 0.5).
+        // Si es pisable, ignoramos la colisión y caminamos sobre él.
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+        boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
+
+        if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
             if (esEscalable(client, piesDelante, cabezaDelante)) {
-                // Iniciar salto si no estamos ya saltando
                 if (saltoTicks == 0) {
                     saltoTicks = DURACION_SALTO_TICKS;
                 }
@@ -153,20 +155,19 @@ public class AutoWalker {
             }
         }
 
-        // === GESTIÓN DEL SALTO ===
+        // === 3. GESTIÓN DEL SALTO ===
         if (saltoTicks > 0) {
             client.options.keyJump.setDown(true);
             saltoTicks--;
             if (saltoTicks == 0) {
                 client.options.keyJump.setDown(false);
             }
-            // Durante el salto, mantener el avance
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
             return;
         }
 
-        // === COMPROBAR PRECIPICIO ===
+        // === 4. COMPROBAR PRECIPICIO ===
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -195,35 +196,45 @@ public class AutoWalker {
     }
 
     /**
-     * Determina si un obstáculo a la altura de los pies es escalable.
-     * Escalables: losas, escaleras (no invertidas), y bloques de altura <= 1.0
-     * con el hueco de la cabeza libre.
+     * Determina si un bloque es "pisable" (altura de colisión < 0.5).
+     * Alfombras, placas de presión, caminos de tierra, etc.
+     * Estos bloques NO bloquean al jugador y se pueden atravesar caminando.
+     */
+    private boolean esBloquePisable(Minecraft client, BlockPos pos, BlockState estado) {
+        if (estado.isAir()) return true;
+
+        VoxelShape forma = estado.getCollisionShape(client.level, pos);
+        if (forma.isEmpty()) return true;
+
+        double altura = forma.max(Direction.Axis.Y);
+        return altura < ALTURA_PISABLE;
+    }
+
+    /**
+     * Determina si un obstáculo es escalable (saltable).
+     * Escalables: losas, escaleras no invertidas, bloques con altura entre 0.5 y 1.0.
      */
     private boolean esEscalable(Minecraft client, BlockPos piesDelante, BlockPos cabezaDelante) {
-        BlockState estadoPies = client.level.getBlockState(piesDelante);
-
-        // El bloque de la cabeza debe estar libre para poder saltar
+        // La cabeza debe estar libre
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
         if (!estadoCabeza.getCollisionShape(client.level, cabezaDelante).isEmpty()) {
             return false;
         }
 
-        // Las losas son escalables (altura 0.5)
+        BlockState estadoPies = client.level.getBlockState(piesDelante);
+
         if (estadoPies.is(BlockTags.SLABS)) return true;
 
-        // Las escaleras normales (no invertidas) son escalables
         if (estadoPies.getBlock() instanceof StairBlock) {
-            // Verificar que no sea una escalera invertida (half=top)
             Half half = estadoPies.getValue(StairBlock.HALF);
             return half == Half.BOTTOM;
         }
 
-        // Cualquier bloque con altura de colisión <= 1.0 y > 0.5 es escalable
         VoxelShape forma = estadoPies.getCollisionShape(client.level, piesDelante);
         if (forma.isEmpty()) return false;
 
         double altura = forma.max(Direction.Axis.Y);
-        return altura <= 1.0 && altura > 0.5;
+        return altura <= 1.0 && altura > ALTURA_PISABLE;
     }
 
     private boolean colisionaConBloque(Minecraft client, BlockPos pos, AABB hitboxJugador) {
@@ -253,7 +264,7 @@ public class AutoWalker {
         if (shape.isEmpty()) return false;
 
         double altura = shape.max(Direction.Axis.Y);
-        return altura >= 0.5;
+        return altura >= ALTURA_PISABLE;
     }
 
     private float normalizarAngulo(float angulo) {

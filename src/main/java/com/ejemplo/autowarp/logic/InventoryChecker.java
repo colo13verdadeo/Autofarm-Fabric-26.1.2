@@ -4,6 +4,7 @@ import com.ejemplo.autowarp.config.AutoWarpConfig;
 import com.ejemplo.autowarp.config.CoordStorage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -11,6 +12,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 import java.util.List;
 
@@ -23,6 +25,12 @@ public class InventoryChecker {
     /** Ticks de espera tras el comando antes de calcular navegación (1 segundo). */
     private static final int ESPERA_POST_COMANDO_TICKS = 20;
 
+    /** Ticks extra para que los chunks terminen de cargar (medio segundo). */
+    private static final int ESPERA_CARGA_CHUNKS_TICKS = 10;
+
+    /** Ticks máximos a esperar si los chunks no cargan. */
+    private static final int ESPERA_CARGA_MAXIMA_TICKS = 100; // 5 segundos
+
     private int contadorTicks = 0;
     private int throttleCounter = 0;
     private boolean inventarioLlenoAnterior = false;
@@ -31,6 +39,12 @@ public class InventoryChecker {
 
     /** Contador para el delay post-comando. -1 significa inactivo. */
     private int esperaPostComandoTicks = -1;
+
+    /** Contador para el delay de carga de chunks. -1 significa inactivo. */
+    private int esperaCargaChunksTicks = -1;
+
+    /** Contador total de espera por si los chunks tardan demasiado. */
+    private int esperaCargaTotalTicks = 0;
 
     private final AutoWalker autoWalker = new AutoWalker();
 
@@ -49,11 +63,29 @@ public class InventoryChecker {
 
         autoWalker.tick(client);
 
-        // === Fase de espera post-comando ===
+        // === FASE 1: espera post-comando (1 segundo) ===
         if (esperaPostComandoTicks >= 0) {
             esperaPostComandoTicks--;
             if (esperaPostComandoTicks <= 0) {
                 esperaPostComandoTicks = -1;
+                // Iniciar espera de carga de chunks
+                esperaCargaChunksTicks = ESPERA_CARGA_CHUNKS_TICKS;
+                esperaCargaTotalTicks = 0;
+            }
+            return;
+        }
+
+        // === FASE 2: espera de carga de chunks ===
+        if (esperaCargaChunksTicks >= 0) {
+            esperaCargaChunksTicks--;
+            esperaCargaTotalTicks++;
+
+            boolean chunksListos = chunksCargados(client, player);
+            boolean tiempoAgotado = esperaCargaTotalTicks > ESPERA_CARGA_MAXIMA_TICKS;
+
+            if (esperaCargaChunksTicks <= 0 || chunksListos || tiempoAgotado) {
+                esperaCargaChunksTicks = -1;
+                esperaCargaTotalTicks = 0;
                 intentarNavegacion(player);
             }
             return;
@@ -100,6 +132,28 @@ public class InventoryChecker {
         }
     }
 
+    /**
+     * Comprueba si los chunks alrededor del jugador están cargados.
+     * Verifica el chunk actual y los 8 chunks vecinos (3x3).
+     */
+    private boolean chunksCargados(Minecraft client, LocalPlayer player) {
+        if (client.level == null) return false;
+
+        int chunkX = player.getBlockX() >> 4;
+        int chunkZ = player.getBlockZ() >> 4;
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                LevelChunk chunk = client.level.getChunkSource()
+                        .getChunk(chunkX + dx, chunkZ + dz, false);
+                if (chunk == null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     private boolean estaInventarioLleno(LocalPlayer player) {
         var menu = player.containerMenu;
         Inventory playerInventory = player.getInventory();
@@ -141,11 +195,6 @@ public class InventoryChecker {
         }
     }
 
-    /**
-     * Recorre TODAS las coordenadas del contexto actual.
-     * Se salta las que no cumplen condiciones (distancia, item, stack)
-     * y continúa con la siguiente. Solo navega a la primera que cumpla todo.
-     */
     private void intentarNavegacion(LocalPlayer player) {
         List<CoordStorage.Coordenada> lista = CoordStorage.getCoordenadasActuales();
 
@@ -156,7 +205,6 @@ public class InventoryChecker {
         CoordStorage.Coordenada elegida = null;
 
         for (CoordStorage.Coordenada cartel : lista) {
-            // 1. Verificar distancia
             double dx = cartel.x - player.getX();
             double dz = cartel.z - player.getZ();
             double distancia = Math.sqrt(dx * dx + dz * dz);
@@ -168,7 +216,6 @@ public class InventoryChecker {
                 continue;
             }
 
-            // 2. Verificar item asociado
             if (cartel.itemId == null || cartel.itemId.isEmpty()) {
                 player.sendSystemMessage(Component.literal(
                         "[AutoWarp] Cartel " + cartel + " sin item asociado. Saltando."));
@@ -194,7 +241,6 @@ public class InventoryChecker {
                 continue;
             }
 
-            // 3. Verificar stack completo del item
             int cantidad = contarItem(player, itemObjetivo);
             if (cantidad < 64) {
                 player.sendSystemMessage(Component.literal(
@@ -203,13 +249,11 @@ public class InventoryChecker {
                 continue;
             }
 
-            // Todo OK: este es el elegido
             elegida = cartel;
             break;
         }
 
         if (elegida == null) {
-            // Ninguna coordenada cumplió las condiciones
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Ningún cartel cumple las condiciones para navegar."));
             return;
