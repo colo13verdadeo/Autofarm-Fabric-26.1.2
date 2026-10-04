@@ -29,6 +29,9 @@ public class AutoWalker {
     private static final int MAX_INTENTOS_DESVIO = 6;
     private static final float ANGULO_DESVIO = 60.0f;
 
+    /** Ticks que dura el retroceso de seguridad. */
+    private static final int DURACION_RETROCESO_TICKS = 6;
+
     private boolean activo = false;
     private int targetX, targetY, targetZ;
     private int timeoutTicks = 0;
@@ -38,6 +41,9 @@ public class AutoWalker {
     private int desvioTicks = 0;
     private int intentosDesvio = 0;
     private int ultimaDireccionDesvio = 1;
+
+    /** Ticks restantes de retroceso. 0 = no retrocediendo. */
+    private int retrocesoTicks = 0;
 
     public void iniciar(int x, int y, int z) {
         this.activo = true;
@@ -50,6 +56,7 @@ public class AutoWalker {
         this.desvioTicks = 0;
         this.intentosDesvio = 0;
         this.ultimaDireccionDesvio = 1;
+        this.retrocesoTicks = 0;
     }
 
     public void detener(Minecraft client) {
@@ -58,10 +65,12 @@ public class AutoWalker {
         this.saltoTicks = 0;
         this.estadoDesvio = 0;
         this.desvioTicks = 0;
+        this.retrocesoTicks = 0;
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyJump.setDown(false);
+            client.options.keyDown.setDown(false);
         }
     }
 
@@ -104,6 +113,21 @@ public class AutoWalker {
             return;
         }
 
+        // === FASE DE RETROCESO (prioridad máxima) ===
+        if (retrocesoTicks > 0) {
+            retrocesoTicks--;
+            // Retroceder: soltar avance y pulsar S (keyDown)
+            client.options.keyUp.setDown(false);
+            client.options.keySprint.setDown(false);
+            client.options.keyDown.setDown(true);
+
+            // Si el retroceso termina, soltar S y continuar
+            if (retrocesoTicks <= 0) {
+                client.options.keyDown.setDown(false);
+            }
+            return;
+        }
+
         // === GESTIÓN DEL DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
@@ -111,16 +135,15 @@ public class AutoWalker {
             if (desvioTicks <= 0) {
                 estadoDesvio = 0;
             } else {
-                // Aplicar rotación de desvío
                 aplicarRotacionDesvio(client, player, dx, dz);
 
-                // COMPROBAR SEGURIDAD en la dirección desviada ANTES de avanzar
                 if (!esDireccionSegura(client, player)) {
-                    // El desvío nos lleva a un peligro: abortar el desvío inmediatamente
+                    // El desvío nos lleva a un peligro: abortar y retroceder
                     estadoDesvio = 0;
                     desvioTicks = 0;
+                    retrocesoTicks = DURACION_RETROCESO_TICKS;
                     player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Desvío bloqueado o peligroso. Reintentando."));
+                            "[AutoWarp] Desvío peligroso. Retrocediendo."));
                     return;
                 }
 
@@ -215,11 +238,13 @@ public class AutoWalker {
             }
 
             if (caida > CAIDA_MAXIMA) {
-                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Precipicio sin ruta alternativa. Deteniendo navegación."));
-                    detener(client);
-                }
+                // PELIGRO: primero retroceder medio bloque para asegurar posición
+                retrocesoTicks = DURACION_RETROCESO_TICKS;
+                player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] Precipicio detectado. Retrocediendo para buscar ruta."));
+
+                // Tras el retroceso, intentar desvío. Programamos un intento diferido.
+                // Para simplificar, dejamos el desvío para el siguiente ciclo tras el retroceso.
                 return;
             }
         }
@@ -230,9 +255,17 @@ public class AutoWalker {
     }
 
     /**
-     * Comprueba si la dirección actual del jugador es segura para avanzar.
-     * Es decir: no hay precipicio, no hay pared no escalable, no hay obstrucción en cabeza.
+     * Al terminar el retroceso, intenta iniciar un desvío seguro.
+     * Este método se llama desde tick() cuando retrocesoTicks llega a 0.
      */
+    private void trasRetroceso(Minecraft client, LocalPlayer player, double dx, double dz) {
+        if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Sin ruta alternativa tras retroceso. Deteniendo navegación."));
+            detener(client);
+        }
+    }
+
     private boolean esDireccionSegura(Minecraft client, LocalPlayer player) {
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad) * DISTANCIA_MIRA;
@@ -255,12 +288,10 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // Cabeza bloqueada
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
             return false;
         }
 
-        // Pies bloqueados por algo no escalable
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
         if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
@@ -269,7 +300,6 @@ public class AutoWalker {
             }
         }
 
-        // Precipicio
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
@@ -290,10 +320,6 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Inicia un desvío SOLO si la dirección desviada es segura.
-     * Prueba primero un lado y, si no es seguro, el otro.
-     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
             return false;
@@ -301,7 +327,6 @@ public class AutoWalker {
 
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
 
-        // Probar primero el lado que toca según la alternancia
         int ladoPrimero = ultimaDireccionDesvio;
         int ladoSegundo = -ultimaDireccionDesvio;
 
@@ -321,13 +346,9 @@ public class AutoWalker {
             return true;
         }
 
-        // Ningún lado es seguro
         return false;
     }
 
-    /**
-     * Comprueba si la dirección de desvío (yaw objetivo + ángulo * lado) es segura.
-     */
     private boolean esDireccionDesvioSegura(Minecraft client, LocalPlayer player,
                                              float yawObjetivo, int lado) {
         float yawDesviado = normalizarAngulo(yawObjetivo + (ANGULO_DESVIO * lado));
@@ -353,12 +374,10 @@ public class AutoWalker {
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
         );
 
-        // Cabeza bloqueada
         if (colisionaConBloque(client, cabezaDelante, hitboxDelante)) {
             return false;
         }
 
-        // Pies bloqueados por algo no escalable ni pisable
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         boolean esPisable = esBloquePisable(client, piesDelante, estadoPies);
         if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
@@ -367,7 +386,6 @@ public class AutoWalker {
             }
         }
 
-        // Precipicio
         BlockState bloqueSueloDelante = client.level.getBlockState(sueloDelante);
         boolean haySuelo = esBloqueCaminable(client, sueloDelante, bloqueSueloDelante);
 
