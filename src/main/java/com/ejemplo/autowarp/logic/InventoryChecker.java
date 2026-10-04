@@ -18,11 +18,17 @@ public class InventoryChecker {
     private static final int THROTTLE_TICKS = 2;
     private static final double DISTANCIA_MAXIMA = 500.0;
 
+    /** Ticks de espera tras el comando antes de calcular navegación (1 segundo). */
+    private static final int ESPERA_POST_COMANDO_TICKS = 20;
+
     private int contadorTicks = 0;
     private int throttleCounter = 0;
     private boolean inventarioLlenoAnterior = false;
     private boolean enviandoComando = false;
     private int cooldownTicks = 0;
+
+    /** Contador para el delay post-comando. -1 significa inactivo. */
+    private int esperaPostComandoTicks = -1;
 
     private final AutoWalker autoWalker = new AutoWalker();
 
@@ -40,6 +46,17 @@ public class InventoryChecker {
         }
 
         autoWalker.tick(client);
+
+        // === Fase de espera post-comando ===
+        if (esperaPostComandoTicks >= 0) {
+            esperaPostComandoTicks--;
+            if (esperaPostComandoTicks <= 0) {
+                esperaPostComandoTicks = -1;
+                // Ya pasó 1 segundo: calcular y navegar con la posición actualizada
+                intentarNavegacion(player);
+            }
+            return;
+        }
 
         if (cooldownTicks > 0) {
             cooldownTicks--;
@@ -114,7 +131,11 @@ public class InventoryChecker {
                 }
             }
             cooldownTicks = cfg.segundosCooldown * TICKS_POR_SEGUNDO;
-            intentarNavegacion(player);
+
+            // En lugar de navegar inmediatamente, activar la espera de 1 segundo.
+            // La navegación se calculará cuando termine la espera, con la
+            // posición ya actualizada por el servidor tras el warp.
+            esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
         } catch (Exception e) {
             // Silenciar errores
         } finally {
@@ -130,6 +151,7 @@ public class InventoryChecker {
             return;
         }
 
+        // Aquí la posición del jugador ya está actualizada tras el warp.
         double dx = cartel.x - player.getX();
         double dz = cartel.z - player.getZ();
         double distancia = Math.sqrt(dx * dx + dz * dz);
@@ -154,7 +176,6 @@ public class InventoryChecker {
             return;
         }
 
-        // ✅ CORREGIDO: get() devuelve Optional<Reference<Item>> en 26.1
         Item itemObjetivo = BuiltInRegistries.ITEM.get(id)
                 .map(ref -> ref.value())
                 .orElse(null);
