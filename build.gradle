@@ -12,6 +12,7 @@ base {
 
 repositories {
     mavenCentral()
+    maven { url 'https://maven.meteordev.org/releases' } // Repositorio de Baritone
 }
 
 processResources {
@@ -22,10 +23,13 @@ processResources {
     }
 }
 
-dependencies {
+ddependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+    // Baritone API (modImplementation porque es un mod)
+    modImplementation "meteordevelopment:baritone:${project.baritone_version}-SNAPSHOT"
 }
 
 tasks.withType(JavaCompile).configureEach {
