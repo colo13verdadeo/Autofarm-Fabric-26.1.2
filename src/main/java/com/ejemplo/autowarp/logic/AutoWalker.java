@@ -26,7 +26,7 @@ public class AutoWalker {
     private static final double DISTANCIA_LLEGADA = 0.5;
     private static final double VELOCIDAD_ROTACION = 30.0;
     private static final int TIMEOUT_MAX = 20 * 120;
-    private static final double DISTANCIA_MIRA = 2.0;
+    private static final double DISTANCIA_MIRA = 1.5;
     private static final int CAIDA_MAXIMA = 1;
 
     private static final double ALTURA_JUGADOR = 1.8;
@@ -36,20 +36,19 @@ public class AutoWalker {
 
     private static final double MARGEN_LATERAL = 0.15;
 
-    private static final int DURACION_DESVIO_TICKS = 15;
+    private static final int DURACION_DESVIO_TICKS = 8;
     private static final int MAX_INTENTOS_DESVIO = 6;
 
-    private static final int DURACION_RETROCESO_TICKS = 6;
+    private static final int DURACION_RETROCESO_TICKS = 4;
 
-    private static final double DISTANCIA_SIMULACION = 1.0;
+    private static final double DISTANCIA_SIMULACION = 0.5;
 
     private static final int MUESTRAS_TRAYECTORIA = 5;
 
     private static final int MAX_PRUEBAS_FALLIDAS = 11;
 
-    private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 10;
+    private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 5;
 
-    private static final float UMBRAL_ALINEACION_AVANCE = 10.0f;
     private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
 
     private static final double UMBRAL_VELOCIDAD_QUIETO = 0.05;
@@ -136,6 +135,8 @@ public class AutoWalker {
             client.options.keySprint.setDown(false);
             client.options.keyJump.setDown(false);
             client.options.keyDown.setDown(false);
+            client.options.keyLeft.setDown(false);
+            client.options.keyRight.setDown(false);
         }
     }
 
@@ -150,20 +151,13 @@ public class AutoWalker {
         return velocidad < UMBRAL_VELOCIDAD_QUIETO;
     }
 
-    /**
-     * Comprueba si una posición concreta tiene suelo caminable debajo.
-     */
     private boolean haySueloEn(Minecraft client, double x, double y, double z) {
         BlockPos pos = BlockPos.containing(x, y - 0.1, z);
         BlockState estado = client.level.getBlockState(pos);
         return esBloqueCaminable(client, pos, estado);
     }
 
-    /**
-     * Comprueba si retroceder es seguro desde la posición actual.
-     */
     private boolean retrocesoEsSeguro(Minecraft client, LocalPlayer player) {
-        // Retroceder = dirección opuesta al yaw actual
         double yawRad = Math.toRadians(player.getYRot());
         double backX = Math.sin(yawRad);
         double backZ = -Math.cos(yawRad);
@@ -175,10 +169,6 @@ public class AutoWalker {
         return haySueloEn(client, checkX, checkY, checkZ);
     }
 
-    /**
-     * Comprueba si desviar lateralmente es seguro.
-     * lado = 1 izquierda, -1 derecha.
-     */
     private boolean desvioLateralEsSeguro(Minecraft client, LocalPlayer player, int lado) {
         double yawRad = Math.toRadians(player.getYRot() + 90 * lado);
         double sideX = -Math.sin(yawRad);
@@ -191,9 +181,6 @@ public class AutoWalker {
         return haySueloEn(client, checkX, checkY, checkZ);
     }
 
-    /**
-     * Comprueba si el jugador está justo al borde de un precipicio.
-     */
     private boolean alBordeDePrecipicio(Minecraft client, LocalPlayer player) {
         BlockPos pies = BlockPos.containing(player.getX(), player.getY() - 0.1, player.getZ());
         BlockState estadoPies = client.level.getBlockState(pies);
@@ -213,9 +200,6 @@ public class AutoWalker {
         return caida > CAIDA_MAXIMA;
     }
 
-    /**
-     * Comprueba si la dirección dada apunta hacia un precipicio.
-     */
     private boolean direccionApuntaAPrecipicio(Minecraft client, LocalPlayer player, float yaw) {
         double yawRad = Math.toRadians(yaw);
         double forwardX = -Math.sin(yawRad);
@@ -242,54 +226,42 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Maneja la situación de "al borde de precipicio".
-     * Elige la dirección segura: retroceder, desviar izquierda, desviar derecha o quedarse quieto.
-     */
     private void manejarBordeDePrecipicio(Minecraft client, LocalPlayer player) {
-        // 1. ¿Retroceder es seguro?
         if (retrocesoEsSeguro(client, player)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
+            client.options.keyLeft.setDown(false);
+            client.options.keyRight.setDown(false);
             client.options.keyDown.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Al borde de precipicio. Retrocediendo."));
             return;
         }
 
-        // 2. ¿Desviar a la izquierda es seguro?
         if (desvioLateralEsSeguro(client, player, 1)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyDown.setDown(false);
+            client.options.keyRight.setDown(false);
             client.options.keyLeft.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Al borde. Desviando izquierda."));
             return;
         }
 
-        // 3. ¿Desviar a la derecha es seguro?
         if (desvioLateralEsSeguro(client, player, -1)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyDown.setDown(false);
+            client.options.keyLeft.setDown(false);
             client.options.keyRight.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
-            player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] Al borde. Desviando derecha."));
             return;
         }
 
-        // 4. Ninguna dirección es segura: quedarse quieto
         client.options.keyUp.setDown(false);
         client.options.keySprint.setDown(false);
         client.options.keyDown.setDown(false);
         client.options.keyLeft.setDown(false);
         client.options.keyRight.setDown(false);
-        player.sendSystemMessage(Component.literal(
-                "[AutoWarp] Bloqueado en todas direcciones. Esperando."));
         esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
     }
 
@@ -345,7 +317,6 @@ public class AutoWalker {
             return;
         }
 
-        // === DETECCIÓN DE CAÍDA ===
         if (!player.onGround() && saltoTicks == 0 && ticksIgnorandoSuelo == 0) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -353,7 +324,6 @@ public class AutoWalker {
             return;
         }
 
-        // === ESPERA ENTRE PRUEBAS ===
         if (esperaEntrePruebasTicks > 0) {
             esperaEntrePruebasTicks--;
             client.options.keyUp.setDown(false);
@@ -371,17 +341,13 @@ public class AutoWalker {
             return;
         }
 
-        // === RETROCESO ===
         if (retrocesoTicks > 0) {
             retrocesoTicks--;
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
-            // Mantener la tecla que corresponda
-            if (client.options.keyDown.isDown()
-                    || client.options.keyLeft.isDown()
-                    || client.options.keyRight.isDown()) {
-                // Ya está pulsada la tecla correcta
-            } else {
+            if (!client.options.keyDown.isDown()
+                    && !client.options.keyLeft.isDown()
+                    && !client.options.keyRight.isDown()) {
                 client.options.keyDown.setDown(true);
             }
 
@@ -394,13 +360,11 @@ public class AutoWalker {
             return;
         }
 
-        // === DETECCIÓN DE BORDE DE PRECIPICIO ===
         if (alBordeDePrecipicio(client, player)) {
             manejarBordeDePrecipicio(client, player);
             return;
         }
 
-        // === MODO SIN ZONA SEGURA ===
         if (!zonaSegura) {
             float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
             float yawActual = player.getYRot();
@@ -421,7 +385,6 @@ public class AutoWalker {
             return;
         }
 
-        // === ESPERA A QUE EL JUGADOR SE DETENGA ===
         if (!jugadorQuieto(player)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -433,7 +396,6 @@ public class AutoWalker {
         }
         esperaQuieto = 0;
 
-        // === DESVÍO ACTIVO ===
         if (estadoDesvio != 0) {
             desvioTicks--;
 
@@ -455,12 +417,6 @@ public class AutoWalker {
                 }
 
                 if (!esDireccionSegura(client, player)) {
-                    debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot())
-                            + " EstadoDesvio=" + estadoDesvio
-                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual)
-                            + " Pos=(" + String.format("%.2f", player.getX()) + ", "
-                            + String.format("%.2f", player.getY()) + ", "
-                            + String.format("%.2f", player.getZ()) + ")");
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -469,12 +425,6 @@ public class AutoWalker {
                 }
 
                 if (!simularAvanceSeguro(client, player)) {
-                    debug("DESVÍO BLOQUEADO activado. Yaw=" + String.format("%.1f", player.getYRot())
-                            + " EstadoDesvio=" + estadoDesvio
-                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual)
-                            + " Pos=(" + String.format("%.2f", player.getX()) + ", "
-                            + String.format("%.2f", player.getY()) + ", "
-                            + String.format("%.2f", player.getZ()) + ")");
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -488,20 +438,14 @@ public class AutoWalker {
             }
         }
 
-        // === AVANCE NORMAL HACIA EL OBJETIVO ===
+        // === AVANCE NORMAL: rotar suave y avanzar SIEMPRE ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        float diferenciaRestante = Math.abs(normalizarAngulo(yawObjetivo - player.getYRot()));
-        if (diferenciaRestante > UMBRAL_ALINEACION_AVANCE) {
-            client.options.keyUp.setDown(false);
-            client.options.keySprint.setDown(false);
-            return;
-        }
-
+        // Avanzar siempre (ya no se espera a estar alineado)
         if (!simularAvanceSeguro(client, player)) {
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 if (!hayHuecoSuficiente(client, player)) {
@@ -601,10 +545,10 @@ public class AutoWalker {
 
         player.sendSystemMessage(Component.literal(
                 "[AutoWarp] Prueba fallida " + pruebasFallidas + "/" + MAX_PRUEBAS_FALLIDAS
-                + ". Retrocediendo para reintentar."));
+                + ". Reintentando."));
 
-        manejarBordeDePrecipicio(client, player);
         intentosDesvio = 0;
+        esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
     }
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
@@ -635,14 +579,6 @@ public class AutoWalker {
             );
 
             if (hayColisionEnHitbox(client, hitboxIntermedia)) {
-                String bloque = describirBloqueQueColisiona(client, hitboxIntermedia);
-                debug("simularAvanceSeguro FALSA: colisión en muestra " + i + "/"
-                        + MUESTRAS_TRAYECTORIA + " a " + String.format("%.2f", distanciaIntermedia)
-                        + " bloques. Yaw=" + String.format("%.1f", player.getYRot())
-                        + " Pos=(" + String.format("%.2f", checkX) + ", "
-                        + String.format("%.2f", checkY) + ", "
-                        + String.format("%.2f", checkZ) + ")"
-                        + " Causa=" + bloque);
                 return false;
             }
         }
@@ -710,43 +646,6 @@ public class AutoWalker {
         }
 
         return false;
-    }
-
-    private String describirBloqueQueColisiona(Minecraft client, AABB hitbox) {
-        int minX = (int) Math.floor(hitbox.minX);
-        int maxX = (int) Math.floor(hitbox.maxX);
-        int minY = (int) Math.floor(hitbox.minY);
-        int maxY = (int) Math.floor(hitbox.maxY);
-        int minZ = (int) Math.floor(hitbox.minZ);
-        int maxZ = (int) Math.floor(hitbox.maxZ);
-
-        for (int bx = minX; bx <= maxX; bx++) {
-            for (int by = minY; by <= maxY; by++) {
-                for (int bz = minZ; bz <= maxZ; bz++) {
-                    BlockPos bpos = new BlockPos(bx, by, bz);
-                    BlockState estado = client.level.getBlockState(bpos);
-
-                    if (estado.isAir()) continue;
-                    if (esBloquePisable(client, bpos, estado)) continue;
-                    if (esBloqueNoSolido(estado)) continue;
-
-                    VoxelShape forma = estado.getCollisionShape(client.level, bpos);
-                    if (forma.isEmpty()) continue;
-
-                    for (AABB cajaBloque : forma.toAabbs()) {
-                        AABB cajaReal = cajaBloque.move(bx, by, bz);
-                        if (cajaReal.intersects(hitbox)) {
-                            Identifier id = BuiltInRegistries.BLOCK.getKey(estado.getBlock());
-                            return "BLOQUE: " + (id != null ? id.toString() : estado.getBlock().toString())
-                                    + " en (" + bx + ", " + by + ", " + bz + ")"
-                                    + " alturaColision=" + String.format("%.2f", forma.max(Direction.Axis.Y));
-                        }
-                    }
-                }
-            }
-        }
-
-        return "desconocido";
     }
 
     private boolean hayEntidadBloqueando(Minecraft client, AABB hitbox) {
