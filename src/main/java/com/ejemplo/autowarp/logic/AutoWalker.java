@@ -54,10 +54,13 @@ public class AutoWalker {
     private static final int UMBRAL_ATASCADO = 20;
 
     /** Distancia máxima a simular en el trayecto largo. */
-    private static final double DISTANCIA_TRAYECTO_LARGO = 8.0;
+    private static final double DISTANCIA_TRAYECTO_LARGO = 5.0;
 
     /** Paso entre muestras del trayecto largo. */
     private static final double PASO_TRAYECTO_LARGO = 0.5;
+
+    /** Umbral de ticks sin progreso antes de forzar desvío. */
+    private static final int UMBRAL_SIN_PROGRESO = 30;
 
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
@@ -94,6 +97,12 @@ public class AutoWalker {
     private int tickCounter = 0;
 
     private int ticksSinMovimiento = 0;
+
+    /** Distancia al objetivo en el tick anterior. */
+    private double distanciaAnterior = Double.MAX_VALUE;
+
+    /** Ticks consecutivos sin reducir la distancia al objetivo. */
+    private int ticksSinProgreso = 0;
 
     private void debug(String mensaje) {
         LOGGER.info("[DEBUG] " + mensaje);
@@ -146,6 +155,8 @@ public class AutoWalker {
         this.esperaEntrePruebasTicks = 0;
         this.tickCounter = 0;
         this.ticksSinMovimiento = 0;
+        this.distanciaAnterior = Double.MAX_VALUE;
+        this.ticksSinProgreso = 0;
         debug("INICIAR navegación hacia (" + String.format("%.2f", x) + ", "
                 + String.format("%.2f", y) + ", " + String.format("%.2f", z) + ")");
     }
@@ -162,6 +173,7 @@ public class AutoWalker {
         this.esperaEntrePruebasTicks = 0;
         this.anguloDesvioActual = 0f;
         this.ticksSinMovimiento = 0;
+        this.ticksSinProgreso = 0;
         debug("DETENER navegación");
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
@@ -252,11 +264,6 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Simula el trayecto hacia el objetivo. La simulación es más corta (8 bloques)
-     * para permitir que el AutoWalker vaya ajustando la dirección.
-     * Si en los primeros 8 bloques hay salida, devuelve true.
-     */
     private boolean simularTrayectoLargo(Minecraft client, LocalPlayer player, float yawDireccion) {
         double yawRad = Math.toRadians(yawDireccion);
         double forwardX = -Math.sin(yawRad);
@@ -273,7 +280,6 @@ public class AutoWalker {
             distanciaRecorrida += PASO_TRAYECTO_LARGO;
 
             if (hayColisionNoEscalable(client, posX, posY, posZ, MARGEN_LATERAL)) {
-                debug("  Trayecto largo: colisión a " + String.format("%.1f", distanciaRecorrida) + " bloques");
                 return false;
             }
 
@@ -291,7 +297,6 @@ public class AutoWalker {
                     caida++;
                 }
                 if (caida > CAIDA_MAXIMA) {
-                    debug("  Trayecto largo: precipicio a " + String.format("%.1f", distanciaRecorrida) + " bloques");
                     return false;
                 }
             }
@@ -301,10 +306,6 @@ public class AutoWalker {
     }
 
     private void manejarBordeDePrecipicio(Minecraft client, LocalPlayer player) {
-        debug("MANEJAR BORDE: retrocesoEsSeguro=" + retrocesoEsSeguro(client, player)
-                + " desvioIzqSeguro=" + desvioLateralEsSeguro(client, player, 1)
-                + " desvioDerSeguro=" + desvioLateralEsSeguro(client, player, -1));
-
         if (retrocesoEsSeguro(client, player)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -369,12 +370,12 @@ public class AutoWalker {
         }
 
         if (tickCounter % 20 == 0) {
-            debug("=== TICK " + tickCounter + " === Estado: desvio=" + estadoDesvio
+            debug("=== TICK " + tickCounter + " === desvio=" + estadoDesvio
                     + " desvioTicks=" + desvioTicks
                     + " retroceso=" + retrocesoTicks
                     + " espera=" + esperaEntrePruebasTicks
                     + " pruebasFallidas=" + pruebasFallidas
-                    + " salto=" + saltoTicks
+                    + " ticksSinProgreso=" + ticksSinProgreso
                     + " ticksSinMovimiento=" + ticksSinMovimiento);
             logTeclas(client);
         }
@@ -418,12 +419,35 @@ public class AutoWalker {
             return;
         }
 
+        // === DETECCIÓN DE PROGRESO ===
+        if (distanciaHorizontal < distanciaAnterior - 0.05) {
+            ticksSinProgreso = 0;
+            distanciaAnterior = distanciaHorizontal;
+        } else {
+            ticksSinProgreso++;
+        }
+
+        // === ATASCAMIENTO: forzar desvío ===
         if (ticksSinMovimiento >= UMBRAL_ATASCADO) {
-            debug("ATASCADO durante " + ticksSinMovimiento + " ticks. Forzando desvío.");
+            debug("ATASCADO " + ticksSinMovimiento + " ticks. Forzando desvío.");
             ticksSinMovimiento = 0;
+            ticksSinProgreso = 0;
+            distanciaAnterior = Double.MAX_VALUE;
 
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                debug("Sin desvío seguro tras atascamiento. Retrocediendo.");
+                manejarBordeDePrecipicio(client, player);
+            }
+            return;
+        }
+
+        // === SIN PROGRESO: forzar desvío tras muchos ticks ===
+        if (ticksSinProgreso >= UMBRAL_SIN_PROGRESO && estadoDesvio == 0
+                && retrocesoTicks == 0 && esperaEntrePruebasTicks == 0) {
+            debug("Sin progreso " + ticksSinProgreso + " ticks. Forzando desvío.");
+            ticksSinProgreso = 0;
+            distanciaAnterior = Double.MAX_VALUE;
+
+            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 manejarBordeDePrecipicio(client, player);
             }
             return;
@@ -494,7 +518,6 @@ public class AutoWalker {
 
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
-            if (tickCounter % 20 == 0) logVelocidad(player, "sinZonaSegura");
             return;
         }
 
@@ -505,6 +528,9 @@ public class AutoWalker {
                 estadoDesvio = 0;
                 anguloDesvioActual = 0f;
                 pruebasFallidas = 0;
+                intentosDesvio = 0;
+                // Gracia: no comprobar progreso durante 15 ticks
+                ticksSinProgreso = -15;
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
@@ -519,7 +545,6 @@ public class AutoWalker {
                 }
 
                 if (!esDireccionSegura(client, player)) {
-                    debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot()));
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -528,7 +553,6 @@ public class AutoWalker {
                 }
 
                 if (!simularAvanceSeguro(client, player)) {
-                    debug("DESVÍO BLOQUEADO activado. Yaw=" + String.format("%.1f", player.getYRot()));
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -538,17 +562,16 @@ public class AutoWalker {
 
                 client.options.keyUp.setDown(true);
                 client.options.keySprint.setDown(true);
-                if (tickCounter % 20 == 0) logVelocidad(player, "desvio");
                 return;
             }
         }
 
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
 
-        // === Simular trayecto largo solo si el objetivo está lejos ===
-        if (distanciaHorizontal > DISTANCIA_TRAYECTO_LARGO) {
+        // === Simular trayecto largo SOLO si hay ticks sin progreso ===
+        if (ticksSinProgreso > 5 && distanciaHorizontal > DISTANCIA_TRAYECTO_LARGO) {
             if (!simularTrayectoLargo(client, player, yawObjetivo)) {
-                debug("Trayecto largo hacia objetivo NO seguro. Buscando desvío.");
+                debug("Trayecto largo NO seguro tras " + ticksSinProgreso + " ticks sin progreso.");
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                     registrarPruebaFallida(client, player);
                 }
@@ -562,14 +585,17 @@ public class AutoWalker {
         player.setYRot(yawActual + paso);
 
         if (!simularAvanceSeguro(client, player)) {
-            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                if (!hayHuecoSuficiente(client, player)) {
-                    player.sendSystemMessage(Component.literal(
-                            "[AutoWarp] Pasillo estrecho detectado. No se puede pasar."));
+            // Solo desviar si falla repetidamente
+            if (ticksSinProgreso > 3) {
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    if (!hayHuecoSuficiente(client, player)) {
+                        player.sendSystemMessage(Component.literal(
+                                "[AutoWarp] Pasillo estrecho detectado. No se puede pasar."));
+                    }
+                    registrarPruebaFallida(client, player);
                 }
-                registrarPruebaFallida(client, player);
+                return;
             }
-            return;
         }
 
         if (saltoTicks > 0) {
@@ -581,7 +607,6 @@ public class AutoWalker {
             ticksIgnorandoSuelo = Math.max(ticksIgnorandoSuelo, DURACION_SALTO_TICKS);
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
-            if (tickCounter % 20 == 0) logVelocidad(player, "salto");
             return;
         }
 
@@ -645,9 +670,9 @@ public class AutoWalker {
         }
 
         pruebasFallidas = 0;
+        intentosDesvio = 0;
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
-        if (tickCounter % 20 == 0) logVelocidad(player, "avanceNormal");
     }
 
     private void registrarPruebaFallida(Minecraft client, LocalPlayer player) {
@@ -667,6 +692,7 @@ public class AutoWalker {
                 + ". Reintentando."));
 
         intentosDesvio = 0;
+        ticksSinProgreso = -10;
         if (pruebasFallidas >= 3) {
             esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
         }
@@ -909,13 +935,8 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Elige el mejor desvío entre todos los ángulos seguros de ambos lados.
-     * Ya NO descarta ángulos por trayecto largo: solo los penaliza.
-     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
-            debug("iniciarDesvioSeguro: agotados intentos");
             return false;
         }
 
@@ -951,7 +972,6 @@ public class AutoWalker {
 
                 double puntuacion = distAlObjetivo + (angulo * 0.05);
 
-                // Penalización si el trayecto largo falla (pero no descarte)
                 if (!simularTrayectoLargo(client, player, yawDesviado)) {
                     puntuacion += 1000;
                 }
@@ -966,7 +986,6 @@ public class AutoWalker {
         }
 
         if (!encontrado) {
-            debug("iniciarDesvioSeguro: ningún ángulo seguro");
             return false;
         }
 
@@ -975,11 +994,6 @@ public class AutoWalker {
         desvioTicks = DURACION_DESVIO_TICKS;
         anguloDesvioActual = mejorAngulo;
         ultimaDireccionDesvio = -mejorLado;
-
-        debug("Desvío elegido: ángulo=" + String.format("%.0f", mejorAngulo)
-                + "° lado=" + mejorLado
-                + " puntuacion=" + String.format("%.2f", mejorPuntuacion));
-
         return true;
     }
 
