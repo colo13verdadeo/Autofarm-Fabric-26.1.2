@@ -38,11 +38,20 @@ public class InventoryChecker {
     /** Distancia a la que se considera que Baritone ha llegado al destino. */
     private static final double DISTANCIA_LLEGADA_BARITONE = 2.0;
 
+    /** Ticks de gracia tras iniciar Baritone antes de comprobar llegada (2 segundos). */
+    private static final int GRACIA_BARITONE_TICKS = 40;
+
     /** Ticks de espera máxima para que carguen los chunks (5 segundos). */
     private static final int ESPERA_CHUNKS_MAXIMA_TICKS = 100;
 
     /** Distancia mínima en chunks que deben estar cargados alrededor del destino. */
     private static final int CHUNKS_RADIO_DESTINO = 1;
+
+    /** Distancia para considerar que el warp ya nos movió cerca del destino. */
+    private static final double DISTANCIA_WARP_COMPLETADO = 50.0;
+
+    /** Ticks máximos esperando a que el warp se complete (10 segundos). */
+    private static final int ESPERA_WARP_MAXIMA_TICKS = 200;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -67,11 +76,20 @@ public class InventoryChecker {
     private double targetBaritoneX, targetBaritoneY, targetBaritoneZ;
     private boolean navegandoConBaritone = false;
 
+    /** Ticks de gracia tras iniciar Baritone antes de comprobar llegada. */
+    private int graciaBaritone = 0;
+
     /** Contador de ticks esperando que carguen los chunks del destino. */
     private int esperandoChunksDestino = -1;
 
     /** Coordenadas del destino que estamos esperando. */
     private double destinoPendienteX, destinoPendienteY, destinoPendienteZ;
+
+    /** Contador de ticks esperando que el warp se complete. -1 = inactivo. */
+    private int esperandoWarpAutofarm = -1;
+
+    /** Coordenadas del autofarm que estamos esperando tras el warp. */
+    private double destinoAutofarmX, destinoAutofarmY, destinoAutofarmZ;
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
@@ -92,6 +110,29 @@ public class InventoryChecker {
         // Comprobar llegada de Baritone siempre
         comprobarLlegadaBaritone(client, player);
 
+        // === ESPERA A QUE EL WARP DE AUTOFARM SE COMPLETE ===
+        if (esperandoWarpAutofarm >= 0) {
+            esperandoWarpAutofarm++;
+
+            double dx = destinoAutofarmX - player.getX();
+            double dz = destinoAutofarmZ - player.getZ();
+            double distancia = Math.sqrt(dx * dx + dz * dz);
+
+            if (distancia < DISTANCIA_WARP_COMPLETADO) {
+                System.out.println("[AutoWarp] Warp completado. Iniciando Baritone. Distancia al destino: " + distancia);
+                esperandoWarpAutofarm = -1;
+                iniciarNavegacionBaritone(destinoAutofarmX, destinoAutofarmY, destinoAutofarmZ);
+                return;
+            }
+
+            if (esperandoWarpAutofarm >= ESPERA_WARP_MAXIMA_TICKS) {
+                System.out.println("[AutoWarp] Timeout esperando warp. Iniciando Baritone igualmente.");
+                esperandoWarpAutofarm = -1;
+                iniciarNavegacionBaritone(destinoAutofarmX, destinoAutofarmY, destinoAutofarmZ);
+            }
+            return;
+        }
+
         // === ESPERA DE CARGA DE CHUNKS DEL DESTINO ===
         if (esperandoChunksDestino >= 0) {
             esperandoChunksDestino++;
@@ -100,14 +141,16 @@ public class InventoryChecker {
                 System.out.println("[AutoWarp] Chunks cargados. Iniciando Baritone.");
                 esperandoChunksDestino = -1;
                 navegandoConBaritone = true;
+                graciaBaritone = GRACIA_BARITONE_TICKS;
                 navegarConBaritone(destinoPendienteX, destinoPendienteZ);
                 return;
             }
 
             if (esperandoChunksDestino >= ESPERA_CHUNKS_MAXIMA_TICKS) {
-                System.out.println("[AutoWarp] Timeout esperando chunks. Intentando navegar igualmente.");
+                System.out.println("[AutoWarp] Timeout esperando chunks. Iniciando Baritone igualmente.");
                 esperandoChunksDestino = -1;
                 navegandoConBaritone = true;
+                graciaBaritone = GRACIA_BARITONE_TICKS;
                 navegarConBaritone(destinoPendienteX, destinoPendienteZ);
             }
             return;
@@ -203,12 +246,14 @@ public class InventoryChecker {
             this.destinoPendienteX = x;
             this.destinoPendienteY = y;
             this.destinoPendienteZ = z;
-            System.out.println("[AutoWarp] Esperando carga de chunks alrededor del destino (" + (int) x + ", " + (int) z + ")...");
+            System.out.println("[AutoWarp] Esperando carga de chunks alrededor del destino ("
+                    + (int) x + ", " + (int) z + ")...");
             return;
         }
 
         // Chunks cargados: iniciar navegación
         this.navegandoConBaritone = true;
+        this.graciaBaritone = GRACIA_BARITONE_TICKS;
         navegarConBaritone(x, z);
     }
 
@@ -287,12 +332,19 @@ public class InventoryChecker {
     private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
         if (!navegandoConBaritone || player == null) return;
 
+        // Dar tiempo a Baritone para arrancar antes de comprobar
+        if (graciaBaritone > 0) {
+            graciaBaritone--;
+            return;
+        }
+
         double dx = targetBaritoneX - player.getX();
         double dz = targetBaritoneZ - player.getZ();
         double distancia = Math.sqrt(dx * dx + dz * dz);
 
-        if (!baritoneNavegando() || distancia < DISTANCIA_LLEGADA_BARITONE) {
-            System.out.println("[AutoWarp] Baritone ha llegado o terminado. Distancia: " + distancia);
+        // Solo considerar llegada si Baritone ya no navega Y estamos cerca
+        if (!baritoneNavegando() && distancia < DISTANCIA_LLEGADA_BARITONE) {
+            System.out.println("[AutoWarp] Baritone ha llegado. Distancia: " + distancia);
             navegandoConBaritone = false;
 
             if (cartelActual != null) {
@@ -300,6 +352,9 @@ public class InventoryChecker {
             } else {
                 onLlegadaAutofarm((int) targetBaritoneX, (int) targetBaritoneY, (int) targetBaritoneZ);
             }
+        } else if (!baritoneNavegando() && distancia >= DISTANCIA_LLEGADA_BARITONE) {
+            // Baritone dejó de navegar pero no llegamos
+            System.out.println("[AutoWarp] Baritone dejó de navegar. Distancia restante: " + distancia);
         }
     }
 
@@ -506,9 +561,12 @@ public class InventoryChecker {
 
             if (cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Autofarm activado. Navegando a la ubicación capturada."));
-                irAAutofarmTrasEspera = true;
-                esperaPostComandoTicks = ESPERA_POST_COMANDO_TICKS;
+                        "[AutoWarp] Autofarm activado. Esperando a que el warp se complete..."));
+
+                this.esperandoWarpAutofarm = 0;
+                this.destinoAutofarmX = cfg.autofarmX;
+                this.destinoAutofarmY = cfg.autofarmY;
+                this.destinoAutofarmZ = cfg.autofarmZ;
             }
         }
     }
@@ -521,10 +579,12 @@ public class InventoryChecker {
 
             if (cfg != null && cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Navegando a autofarm con Baritone ("
-                        + (int) cfg.autofarmX + ", " + (int) cfg.autofarmZ + ")."));
+                        "[AutoWarp] Autofarm activado. Esperando a que el warp se complete..."));
 
-                iniciarNavegacionBaritone(cfg.autofarmX, cfg.autofarmY, cfg.autofarmZ);
+                this.esperandoWarpAutofarm = 0;
+                this.destinoAutofarmX = cfg.autofarmX;
+                this.destinoAutofarmY = cfg.autofarmY;
+                this.destinoAutofarmZ = cfg.autofarmZ;
                 return;
             }
         }
