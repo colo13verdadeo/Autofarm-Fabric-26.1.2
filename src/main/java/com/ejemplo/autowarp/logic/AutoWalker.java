@@ -51,8 +51,13 @@ public class AutoWalker {
 
     private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
 
-    /** Umbral de ticks sin movimiento antes de considerar atascado. */
     private static final int UMBRAL_ATASCADO = 20;
+
+    /** Distancia máxima a simular en el trayecto largo. */
+    private static final double DISTANCIA_TRAYECTO_LARGO = 20.0;
+
+    /** Paso entre muestras del trayecto largo. */
+    private static final double PASO_TRAYECTO_LARGO = 0.5;
 
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
@@ -88,7 +93,6 @@ public class AutoWalker {
 
     private int tickCounter = 0;
 
-    /** Contador de ticks consecutivos sin movimiento. */
     private int ticksSinMovimiento = 0;
 
     private void debug(String mensaje) {
@@ -248,6 +252,54 @@ public class AutoWalker {
         return true;
     }
 
+    /**
+     * Simula el trayecto completo hacia el objetivo desde una dirección dada.
+     * Recorre hasta DISTANCIA_TRAYECTO_LARGO bloques en línea recta.
+     * Devuelve true si todo el trayecto es seguro.
+     */
+    private boolean simularTrayectoLargo(Minecraft client, LocalPlayer player, float yawDireccion) {
+        double yawRad = Math.toRadians(yawDireccion);
+        double forwardX = -Math.sin(yawRad);
+        double forwardZ = Math.cos(yawRad);
+
+        double distanciaRecorrida = 0;
+        double posX = player.getX();
+        double posZ = player.getZ();
+        double posY = player.getY();
+
+        while (distanciaRecorrida < DISTANCIA_TRAYECTO_LARGO) {
+            posX += forwardX * PASO_TRAYECTO_LARGO;
+            posZ += forwardZ * PASO_TRAYECTO_LARGO;
+            distanciaRecorrida += PASO_TRAYECTO_LARGO;
+
+            if (hayColisionNoEscalable(client, posX, posY, posZ, MARGEN_LATERAL)) {
+                debug("  Trayecto largo: colisión a " + String.format("%.1f", distanciaRecorrida) + " bloques");
+                return false;
+            }
+
+            BlockPos sueloCheck = BlockPos.containing(posX, posY - 0.1, posZ);
+            BlockState estadoSuelo = client.level.getBlockState(sueloCheck);
+            boolean haySuelo = esBloqueCaminable(client, sueloCheck, estadoSuelo);
+
+            if (!haySuelo) {
+                int caida = 0;
+                BlockPos check = sueloCheck;
+                while (caida <= CAIDA_MAXIMA + 1) {
+                    BlockState st = client.level.getBlockState(check);
+                    if (esBloqueCaminable(client, check, st)) break;
+                    check = check.below();
+                    caida++;
+                }
+                if (caida > CAIDA_MAXIMA) {
+                    debug("  Trayecto largo: precipicio a " + String.format("%.1f", distanciaRecorrida) + " bloques");
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private void manejarBordeDePrecipicio(Minecraft client, LocalPlayer player) {
         debug("MANEJAR BORDE: retrocesoEsSeguro=" + retrocesoEsSeguro(client, player)
                 + " desvioIzqSeguro=" + desvioLateralEsSeguro(client, player, 1)
@@ -306,7 +358,6 @@ public class AutoWalker {
             ticksIgnorandoSuelo--;
         }
 
-        // === DETECCIÓN DE ATASCAMIENTO ===
         double vxActual = player.getX() - player.xOld;
         double vzActual = player.getZ() - player.zOld;
         double velocidadActual = Math.sqrt(vxActual * vxActual + vzActual * vzActual);
@@ -367,11 +418,10 @@ public class AutoWalker {
             return;
         }
 
-        // === ATASCAMIENTO: forzar desvío ===
         if (ticksSinMovimiento >= UMBRAL_ATASCADO) {
             debug("ATASCADO durante " + ticksSinMovimiento + " ticks. Forzando desvío.");
             ticksSinMovimiento = 0;
-            
+
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
                 debug("Sin desvío seguro tras atascamiento. Retrocediendo.");
                 manejarBordeDePrecipicio(client, player);
@@ -423,7 +473,6 @@ public class AutoWalker {
         }
 
         if (alBordeDePrecipicio(client, player)) {
-            debug("AL BORDE DE PRECIPICIO detectado");
             manejarBordeDePrecipicio(client, player);
             return;
         }
@@ -495,6 +544,16 @@ public class AutoWalker {
         }
 
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+
+        // === NUEVO: simular trayecto largo antes de comprometerse ===
+        if (!simularTrayectoLargo(client, player, yawObjetivo)) {
+            debug("Trayecto largo hacia objetivo NO seguro. Buscando desvío.");
+            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                registrarPruebaFallida(client, player);
+            }
+            return;
+        }
+
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
@@ -848,11 +907,6 @@ public class AutoWalker {
         return true;
     }
 
-    /**
-     * Elige el mejor desvío entre todos los ángulos seguros de ambos lados.
-     * Prioriza el desvío que más acerque al objetivo, con una pequeña
-     * penalización por ángulos grandes.
-     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
             debug("iniciarDesvioSeguro: agotados intentos");
@@ -864,6 +918,7 @@ public class AutoWalker {
         float mejorAngulo = 0;
         int mejorLado = 0;
         double mejorPuntuacion = Double.MAX_VALUE;
+        boolean encontrado = false;
 
         for (int lado : new int[]{1, -1}) {
             for (float angulo : ANGULOS_EXPLORACION) {
@@ -873,31 +928,41 @@ public class AutoWalker {
                     continue;
                 }
 
-                if (esDireccionSeguraParaYaw(client, player, yawDesviado)) {
-                    double yawRad = Math.toRadians(yawDesviado);
-                    double forwardX = -Math.sin(yawRad);
-                    double forwardZ = Math.cos(yawRad);
+                if (!esDireccionSeguraParaYaw(client, player, yawDesviado)) {
+                    continue;
+                }
 
-                    double projX = player.getX() + forwardX * DISTANCIA_SIMULACION * 4;
-                    double projZ = player.getZ() + forwardZ * DISTANCIA_SIMULACION * 4;
+                // === NUEVO: comprobar trayecto largo ===
+                if (!simularTrayectoLargo(client, player, yawDesviado)) {
+                    debug("  Ángulo " + String.format("%.0f", angulo) + "° lado " + lado
+                            + ": descartado por trayecto largo inseguro");
+                    continue;
+                }
 
-                    double distAlObjetivo = Math.sqrt(
-                            (targetX - projX) * (targetX - projX) +
-                            (targetZ - projZ) * (targetZ - projZ));
+                double yawRad = Math.toRadians(yawDesviado);
+                double forwardX = -Math.sin(yawRad);
+                double forwardZ = Math.cos(yawRad);
 
-                    double puntuacion = distAlObjetivo + (angulo * 0.05);
+                double projX = player.getX() + forwardX * DISTANCIA_SIMULACION * 4;
+                double projZ = player.getZ() + forwardZ * DISTANCIA_SIMULACION * 4;
 
-                    if (puntuacion < mejorPuntuacion) {
-                        mejorPuntuacion = puntuacion;
-                        mejorAngulo = angulo;
-                        mejorLado = lado;
-                    }
+                double distAlObjetivo = Math.sqrt(
+                        (targetX - projX) * (targetX - projX) +
+                        (targetZ - projZ) * (targetZ - projZ));
+
+                double puntuacion = distAlObjetivo + (angulo * 0.05);
+
+                if (puntuacion < mejorPuntuacion) {
+                    mejorPuntuacion = puntuacion;
+                    mejorAngulo = angulo;
+                    mejorLado = lado;
+                    encontrado = true;
                 }
             }
         }
 
-        if (mejorLado == 0) {
-            debug("iniciarDesvioSeguro: ningún ángulo seguro");
+        if (!encontrado) {
+            debug("iniciarDesvioSeguro: ningún ángulo con trayecto largo seguro");
             return false;
         }
 
@@ -909,7 +974,8 @@ public class AutoWalker {
 
         debug("Desvío elegido: ángulo=" + String.format("%.0f", mejorAngulo)
                 + "° lado=" + mejorLado
-                + " puntuacion=" + String.format("%.2f", mejorPuntuacion));
+                + " puntuacion=" + String.format("%.2f", mejorPuntuacion)
+                + " (trayecto largo OK)");
 
         return true;
     }
