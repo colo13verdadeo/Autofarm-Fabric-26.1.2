@@ -279,32 +279,30 @@ public class InventoryChecker {
     // BARITONE (modo seguro)
     // =====================================================
 
-    private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
-        this.targetBaritoneX = x;
-        this.targetBaritoneY = y;
-        this.targetBaritoneZ = z;
-        this.graciaBaritone = GRACIA_BARITONE_TICKS;
-        this.ticksEsperandoBaritone = 0;
+private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
+    this.targetBaritoneX = x;
+    this.targetBaritoneY = y;
+    this.targetBaritoneZ = z;
+    this.graciaBaritone = GRACIA_BARITONE_TICKS;
+    this.ticksEsperandoBaritone = 0;
 
-        try {
-            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
-            baritone.getCustomPathingBehavior();
-            baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ((int) x, (int) z));
-            BaritoneAPI.getSettings().allowSprint.value = true;
+    try {
+        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+        baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ((int) x, (int) z));
+        BaritoneAPI.getSettings().allowSprint.value = true;
 
-            Minecraft client = Minecraft.getInstance();
-            if (client.player != null) {
-                client.player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] (Modo seguro) Baritone navegando hacia ("
-                        + (int) x + ", " + (int) z + ")"));
-            }
-        } catch (Exception e) {
-            System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
-            // Fallback: caminar recto si Baritone falla
-            this.usandoBaritone = false;
-            iniciarCaminata(x, y, z, esAutofarm);
+        Minecraft client = Minecraft.getInstance();
+        if (client.player != null) {
+            client.player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] (Modo seguro) Baritone navegando hacia ("
+                    + (int) x + ", " + (int) z + ")"));
         }
+    } catch (Exception e) {
+        System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
+        this.usandoBaritone = false;
+        iniciarCaminata(x, y, z, esAutofarm);
     }
+}
 
     private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
         if (!usandoBaritone || player == null) return;
