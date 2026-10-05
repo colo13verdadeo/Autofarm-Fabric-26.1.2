@@ -602,7 +602,7 @@ public class AutoWalker {
         AABB hitboxDelante = new AABB(
                 piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getY(),
-                piesDelente.getZ() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
                 piesDelante.getY() + ALTURA_JUGADOR,
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
