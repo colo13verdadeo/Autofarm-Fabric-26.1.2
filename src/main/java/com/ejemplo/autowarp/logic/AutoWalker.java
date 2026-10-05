@@ -54,7 +54,7 @@ public class AutoWalker {
     private static final int UMBRAL_ATASCADO = 20;
 
     /** Distancia máxima a simular en el trayecto largo. */
-    private static final double DISTANCIA_TRAYECTO_LARGO = 20.0;
+    private static final double DISTANCIA_TRAYECTO_LARGO = 8.0;
 
     /** Paso entre muestras del trayecto largo. */
     private static final double PASO_TRAYECTO_LARGO = 0.5;
@@ -253,9 +253,9 @@ public class AutoWalker {
     }
 
     /**
-     * Simula el trayecto completo hacia el objetivo desde una dirección dada.
-     * Recorre hasta DISTANCIA_TRAYECTO_LARGO bloques en línea recta.
-     * Devuelve true si todo el trayecto es seguro.
+     * Simula el trayecto hacia el objetivo. La simulación es más corta (8 bloques)
+     * para permitir que el AutoWalker vaya ajustando la dirección.
+     * Si en los primeros 8 bloques hay salida, devuelve true.
      */
     private boolean simularTrayectoLargo(Minecraft client, LocalPlayer player, float yawDireccion) {
         double yawRad = Math.toRadians(yawDireccion);
@@ -545,13 +545,15 @@ public class AutoWalker {
 
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
 
-        // === NUEVO: simular trayecto largo antes de comprometerse ===
-        if (!simularTrayectoLargo(client, player, yawObjetivo)) {
-            debug("Trayecto largo hacia objetivo NO seguro. Buscando desvío.");
-            if (!iniciarDesvioSeguro(client, player, dx, dz)) {
-                registrarPruebaFallida(client, player);
+        // === Simular trayecto largo solo si el objetivo está lejos ===
+        if (distanciaHorizontal > DISTANCIA_TRAYECTO_LARGO) {
+            if (!simularTrayectoLargo(client, player, yawObjetivo)) {
+                debug("Trayecto largo hacia objetivo NO seguro. Buscando desvío.");
+                if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    registrarPruebaFallida(client, player);
+                }
+                return;
             }
-            return;
         }
 
         float yawActual = player.getYRot();
@@ -600,7 +602,7 @@ public class AutoWalker {
         AABB hitboxDelante = new AABB(
                 piesDelante.getX() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getY(),
-                piesDelante.getZ() + 0.5 - ANCHO_JUGADOR / 2,
+                piesDelente.getZ() + 0.5 - ANCHO_JUGADOR / 2,
                 piesDelante.getX() + 0.5 + ANCHO_JUGADOR / 2,
                 piesDelante.getY() + ALTURA_JUGADOR,
                 piesDelante.getZ() + 0.5 + ANCHO_JUGADOR / 2
@@ -907,6 +909,10 @@ public class AutoWalker {
         return true;
     }
 
+    /**
+     * Elige el mejor desvío entre todos los ángulos seguros de ambos lados.
+     * Ya NO descarta ángulos por trayecto largo: solo los penaliza.
+     */
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
             debug("iniciarDesvioSeguro: agotados intentos");
@@ -932,13 +938,6 @@ public class AutoWalker {
                     continue;
                 }
 
-                // === NUEVO: comprobar trayecto largo ===
-                if (!simularTrayectoLargo(client, player, yawDesviado)) {
-                    debug("  Ángulo " + String.format("%.0f", angulo) + "° lado " + lado
-                            + ": descartado por trayecto largo inseguro");
-                    continue;
-                }
-
                 double yawRad = Math.toRadians(yawDesviado);
                 double forwardX = -Math.sin(yawRad);
                 double forwardZ = Math.cos(yawRad);
@@ -952,6 +951,11 @@ public class AutoWalker {
 
                 double puntuacion = distAlObjetivo + (angulo * 0.05);
 
+                // Penalización si el trayecto largo falla (pero no descarte)
+                if (!simularTrayectoLargo(client, player, yawDesviado)) {
+                    puntuacion += 1000;
+                }
+
                 if (puntuacion < mejorPuntuacion) {
                     mejorPuntuacion = puntuacion;
                     mejorAngulo = angulo;
@@ -962,7 +966,7 @@ public class AutoWalker {
         }
 
         if (!encontrado) {
-            debug("iniciarDesvioSeguro: ningún ángulo con trayecto largo seguro");
+            debug("iniciarDesvioSeguro: ningún ángulo seguro");
             return false;
         }
 
@@ -974,8 +978,7 @@ public class AutoWalker {
 
         debug("Desvío elegido: ángulo=" + String.format("%.0f", mejorAngulo)
                 + "° lado=" + mejorLado
-                + " puntuacion=" + String.format("%.2f", mejorPuntuacion)
-                + " (trayecto largo OK)");
+                + " puntuacion=" + String.format("%.2f", mejorPuntuacion));
 
         return true;
     }
