@@ -36,10 +36,10 @@ public class AutoWalker {
 
     private static final double MARGEN_LATERAL = 0.15;
 
-    private static final int DURACION_DESVIO_TICKS = 8;
+    private static final int DURACION_DESVIO_TICKS = 25;
     private static final int MAX_INTENTOS_DESVIO = 6;
 
-    private static final int DURACION_RETROCESO_TICKS = 4;
+    private static final int DURACION_RETROCESO_TICKS = 6;
 
     private static final double DISTANCIA_SIMULACION = 0.5;
 
@@ -47,11 +47,9 @@ public class AutoWalker {
 
     private static final int MAX_PRUEBAS_FALLIDAS = 11;
 
-    private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 5;
+    private static final int ESPERA_ENTRE_PRUEBAS_TICKS = 3;
 
     private static final float UMBRAL_ALINEACION_DESVIO = 15.0f;
-
-    private static final double UMBRAL_VELOCIDAD_QUIETO = 0.05;
 
     private static final float[] ANGULOS_EXPLORACION = {
             30.0f, 60.0f, 90.0f, 120.0f, 150.0f
@@ -83,12 +81,37 @@ public class AutoWalker {
 
     private int esperaEntrePruebasTicks = 0;
 
-    private int esperaQuieto = 0;
-
     private boolean zonaSegura = true;
+
+    /** Contador de ticks para no spamear logs de velocidad. */
+    private int tickCounter = 0;
 
     private void debug(String mensaje) {
         LOGGER.info("[DEBUG] " + mensaje);
+    }
+
+    /**
+     * Log de velocidad del jugador. Se llama cada tick para ver si avanza.
+     */
+    private void logVelocidad(LocalPlayer player, String contexto) {
+        double vx = player.getX() - player.xOld;
+        double vz = player.getZ() - player.zOld;
+        double velocidad = Math.sqrt(vx * vx + vz * vz);
+        debug("VELOCIDAD [" + contexto + "]: " + String.format("%.3f", velocidad)
+                + " bloques/tick | vx=" + String.format("%.3f", vx)
+                + " vz=" + String.format("%.3f", vz)
+                + " | Pos=(" + String.format("%.2f", player.getX()) + ", "
+                + String.format("%.2f", player.getY()) + ", "
+                + String.format("%.2f", player.getZ()) + ")");
+    }
+
+    private void logTeclas(Minecraft client) {
+        debug("TECLAS: keyUp=" + client.options.keyUp.isDown()
+                + " keySprint=" + client.options.keySprint.isDown()
+                + " keyJump=" + client.options.keyJump.isDown()
+                + " keyDown=" + client.options.keyDown.isDown()
+                + " keyLeft=" + client.options.keyLeft.isDown()
+                + " keyRight=" + client.options.keyRight.isDown());
     }
 
     public void setLlegadaCallback(LlegadaCallback callback) {
@@ -115,7 +138,9 @@ public class AutoWalker {
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
-        this.esperaQuieto = 0;
+        this.tickCounter = 0;
+        debug("INICIAR navegación hacia (" + String.format("%.2f", x) + ", "
+                + String.format("%.2f", y) + ", " + String.format("%.2f", z) + ")");
     }
 
     public void detener(Minecraft client) {
@@ -128,8 +153,8 @@ public class AutoWalker {
         this.retrocesoTicks = 0;
         this.pruebasFallidas = 0;
         this.esperaEntrePruebasTicks = 0;
-        this.esperaQuieto = 0;
         this.anguloDesvioActual = 0f;
+        debug("DETENER navegación");
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -142,13 +167,6 @@ public class AutoWalker {
 
     public boolean estaActivo() {
         return activo;
-    }
-
-    private boolean jugadorQuieto(LocalPlayer player) {
-        double vx = player.getX() - player.xOld;
-        double vz = player.getZ() - player.zOld;
-        double velocidad = Math.sqrt(vx * vx + vz * vz);
-        return velocidad < UMBRAL_VELOCIDAD_QUIETO;
     }
 
     private boolean haySueloEn(Minecraft client, double x, double y, double z) {
@@ -227,6 +245,10 @@ public class AutoWalker {
     }
 
     private void manejarBordeDePrecipicio(Minecraft client, LocalPlayer player) {
+        debug("MANEJAR BORDE: retrocesoEsSeguro=" + retrocesoEsSeguro(client, player)
+                + " desvioIzqSeguro=" + desvioLateralEsSeguro(client, player, 1)
+                + " desvioDerSeguro=" + desvioLateralEsSeguro(client, player, -1));
+
         if (retrocesoEsSeguro(client, player)) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
@@ -234,6 +256,7 @@ public class AutoWalker {
             client.options.keyRight.setDown(false);
             client.options.keyDown.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
+            debug("BORDE: retrocediendo");
             return;
         }
 
@@ -244,6 +267,7 @@ public class AutoWalker {
             client.options.keyRight.setDown(false);
             client.options.keyLeft.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
+            debug("BORDE: desviando izquierda");
             return;
         }
 
@@ -254,6 +278,7 @@ public class AutoWalker {
             client.options.keyLeft.setDown(false);
             client.options.keyRight.setDown(true);
             retrocesoTicks = DURACION_RETROCESO_TICKS;
+            debug("BORDE: desviando derecha");
             return;
         }
 
@@ -263,6 +288,7 @@ public class AutoWalker {
         client.options.keyLeft.setDown(false);
         client.options.keyRight.setDown(false);
         esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
+        debug("BORDE: bloqueado, esperando " + ESPERA_ENTRE_PRUEBAS_TICKS + " ticks");
     }
 
     public void tick(Minecraft client) {
@@ -274,19 +300,35 @@ public class AutoWalker {
             return;
         }
 
+        tickCounter++;
+
         if (ticksIgnorandoSuelo > 0) {
             ticksIgnorandoSuelo--;
+        }
+
+        // Log cada 20 ticks para no spamear
+        if (tickCounter % 20 == 0) {
+            debug("=== TICK " + tickCounter + " === Estado: desvio=" + estadoDesvio
+                    + " desvioTicks=" + desvioTicks
+                    + " retroceso=" + retrocesoTicks
+                    + " espera=" + esperaEntrePruebasTicks
+                    + " pruebasFallidas=" + pruebasFallidas
+                    + " salto=" + saltoTicks
+                    + " ticksIgnorandoSuelo=" + ticksIgnorandoSuelo);
+            logTeclas(client);
         }
 
         boolean movimientoManual = false;
 
         if (client.options.keyLeft.isDown() || client.options.keyRight.isDown()) {
             movimientoManual = true;
+            if (tickCounter % 20 == 0) debug("Movimiento manual por keyLeft/keyRight");
         }
         if (retrocesoTicks == 0
                 && esperaEntrePruebasTicks == 0
                 && client.options.keyDown.isDown()) {
             movimientoManual = true;
+            if (tickCounter % 20 == 0) debug("Movimiento manual por keyDown");
         }
 
         if (movimientoManual) {
@@ -318,6 +360,7 @@ public class AutoWalker {
         }
 
         if (!player.onGround() && saltoTicks == 0 && ticksIgnorandoSuelo == 0) {
+            if (tickCounter % 20 == 0) debug("En el aire, esperando a tocar suelo");
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             client.options.keyDown.setDown(false);
@@ -356,11 +399,13 @@ public class AutoWalker {
                 client.options.keyLeft.setDown(false);
                 client.options.keyRight.setDown(false);
                 esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
+                debug("Retroceso terminado, esperando " + ESPERA_ENTRE_PRUEBAS_TICKS + " ticks");
             }
             return;
         }
 
         if (alBordeDePrecipicio(client, player)) {
+            debug("AL BORDE DE PRECIPICIO detectado");
             manejarBordeDePrecipicio(client, player);
             return;
         }
@@ -382,19 +427,9 @@ public class AutoWalker {
 
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
+            if (tickCounter % 20 == 0) logVelocidad(player, "sinZonaSegura");
             return;
         }
-
-        if (!jugadorQuieto(player)) {
-            client.options.keyUp.setDown(false);
-            client.options.keySprint.setDown(false);
-            esperaQuieto++;
-            if (esperaQuieto > 20) {
-                esperaQuieto = 0;
-            }
-            return;
-        }
-        esperaQuieto = 0;
 
         if (estadoDesvio != 0) {
             desvioTicks--;
@@ -403,6 +438,7 @@ public class AutoWalker {
                 estadoDesvio = 0;
                 anguloDesvioActual = 0f;
                 pruebasFallidas = 0;
+                debug("Desvío terminado");
             } else {
                 aplicarRotacionDesvio(client, player, dx, dz);
 
@@ -411,12 +447,20 @@ public class AutoWalker {
                 float diferenciaRotacion = Math.abs(normalizarAngulo(yawObjetivoDesvio - player.getYRot()));
 
                 if (diferenciaRotacion > UMBRAL_ALINEACION_DESVIO) {
+                    if (tickCounter % 20 == 0) {
+                        debug("Desvío: rotando. Dif=" + String.format("%.1f", diferenciaRotacion)
+                                + " yawActual=" + String.format("%.1f", player.getYRot())
+                                + " yawObjetivoDesvio=" + String.format("%.1f", yawObjetivoDesvio));
+                    }
                     client.options.keyUp.setDown(false);
                     client.options.keySprint.setDown(false);
                     return;
                 }
 
                 if (!esDireccionSegura(client, player)) {
+                    debug("DESVÍO PELIGROSO activado. Yaw=" + String.format("%.1f", player.getYRot())
+                            + " EstadoDesvio=" + estadoDesvio
+                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual));
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -425,6 +469,9 @@ public class AutoWalker {
                 }
 
                 if (!simularAvanceSeguro(client, player)) {
+                    debug("DESVÍO BLOQUEADO activado. Yaw=" + String.format("%.1f", player.getYRot())
+                            + " EstadoDesvio=" + estadoDesvio
+                            + " ÁnguloDesvio=" + String.format("%.1f", anguloDesvioActual));
                     estadoDesvio = 0;
                     desvioTicks = 0;
                     anguloDesvioActual = 0f;
@@ -434,25 +481,30 @@ public class AutoWalker {
 
                 client.options.keyUp.setDown(true);
                 client.options.keySprint.setDown(true);
+                if (tickCounter % 20 == 0) logVelocidad(player, "desvio");
                 return;
             }
         }
 
-        // === AVANCE NORMAL: rotar suave y avanzar SIEMPRE ===
+        // === AVANCE NORMAL ===
         float yawObjetivo = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
         float paso = (float) Math.max(-VELOCIDAD_ROTACION, Math.min(VELOCIDAD_ROTACION, diferencia));
         player.setYRot(yawActual + paso);
 
-        // Avanzar siempre (ya no se espera a estar alineado)
         if (!simularAvanceSeguro(client, player)) {
+            debug("Avance bloqueado por simulación. Buscando desvío...");
             if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                debug("No hay desvío posible. Registrando prueba fallida.");
                 if (!hayHuecoSuficiente(client, player)) {
                     player.sendSystemMessage(Component.literal(
                             "[AutoWarp] Pasillo estrecho detectado. No se puede pasar."));
                 }
                 registrarPruebaFallida(client, player);
+            } else {
+                debug("Desvío iniciado: estadoDesvio=" + estadoDesvio
+                        + " angulo=" + String.format("%.1f", anguloDesvioActual));
             }
             return;
         }
@@ -466,6 +518,7 @@ public class AutoWalker {
             ticksIgnorandoSuelo = Math.max(ticksIgnorandoSuelo, DURACION_SALTO_TICKS);
             client.options.keyUp.setDown(true);
             client.options.keySprint.setDown(true);
+            if (tickCounter % 20 == 0) logVelocidad(player, "salto");
             return;
         }
 
@@ -494,12 +547,15 @@ public class AutoWalker {
 
         if (!esPisable && colisionaConBloque(client, piesDelante, hitboxDelante)) {
             if (esEscalable(client, piesDelante, cabezaDelante)) {
+                debug("Bloque escalable detectado. Iniciando salto.");
                 if (saltoTicks == 0) {
                     saltoTicks = DURACION_SALTO_TICKS;
                     ticksIgnorandoSuelo = DURACION_SALTO_TICKS;
                 }
             } else {
+                debug("Bloque NO escalable. Buscando desvío...");
                 if (!iniciarDesvioSeguro(client, player, dx, dz)) {
+                    debug("No hay desvío posible desde bloque no escalable.");
                     registrarPruebaFallida(client, player);
                 }
                 return;
@@ -522,6 +578,7 @@ public class AutoWalker {
                 }
 
                 if (caida > CAIDA_MAXIMA) {
+                    debug("Precipicio detectado en avance normal. Manejar borde.");
                     manejarBordeDePrecipicio(client, player);
                     return;
                 }
@@ -531,10 +588,13 @@ public class AutoWalker {
         pruebasFallidas = 0;
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(true);
+        if (tickCounter % 20 == 0) logVelocidad(player, "avanceNormal");
     }
 
     private void registrarPruebaFallida(Minecraft client, LocalPlayer player) {
         pruebasFallidas++;
+
+        debug("PRUEBA FALLIDA " + pruebasFallidas + "/" + MAX_PRUEBAS_FALLIDAS);
 
         if (pruebasFallidas >= MAX_PRUEBAS_FALLIDAS) {
             player.sendSystemMessage(Component.literal(
@@ -548,7 +608,10 @@ public class AutoWalker {
                 + ". Reintentando."));
 
         intentosDesvio = 0;
-        esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
+        if (pruebasFallidas >= 3) {
+            esperaEntrePruebasTicks = ESPERA_ENTRE_PRUEBAS_TICKS;
+            debug("Esperando " + ESPERA_ENTRE_PRUEBAS_TICKS + " ticks antes de reintentar");
+        }
     }
 
     private boolean simularAvanceSeguro(Minecraft client, LocalPlayer player) {
@@ -569,17 +632,15 @@ public class AutoWalker {
 
             double margen = (i == MUESTRAS_TRAYECTORIA) ? MARGEN_LATERAL : 0.0;
 
-            AABB hitboxIntermedia = new AABB(
-                    checkX - ANCHO_JUGADOR / 2 - margen,
-                    checkY,
-                    checkZ - ANCHO_JUGADOR / 2 - margen,
-                    checkX + ANCHO_JUGADOR / 2 + margen,
-                    checkY + ALTURA_JUGADOR,
-                    checkZ + ANCHO_JUGADOR / 2 + margen
-            );
-
-            if (hayColisionEnHitbox(client, hitboxIntermedia)) {
-                return false;
+            if (hayColisionNoEscalable(client, checkX, checkY, checkZ, margen)) {
+                if (i <= 3) {
+                    if (tickCounter % 20 == 0) {
+                        debug("Simulación FALSA: colisión en muestra " + i + "/5 a "
+                                + String.format("%.2f", distanciaIntermedia) + " bloques");
+                    }
+                    return false;
+                }
+                break;
             }
         }
 
@@ -602,6 +663,9 @@ public class AutoWalker {
                     caida++;
                 }
                 if (caida > CAIDA_MAXIMA) {
+                    if (tickCounter % 20 == 0) {
+                        debug("Simulación FALSA: precipicio al destino. Caída=" + caida);
+                    }
                     return false;
                 }
             }
@@ -610,7 +674,17 @@ public class AutoWalker {
         return true;
     }
 
-    private boolean hayColisionEnHitbox(Minecraft client, AABB hitbox) {
+    private boolean hayColisionNoEscalable(Minecraft client, double checkX, double checkY,
+                                             double checkZ, double margen) {
+        AABB hitbox = new AABB(
+                checkX - ANCHO_JUGADOR / 2 - margen,
+                checkY,
+                checkZ - ANCHO_JUGADOR / 2 - margen,
+                checkX + ANCHO_JUGADOR / 2 + margen,
+                checkY + ALTURA_JUGADOR,
+                checkZ + ANCHO_JUGADOR / 2 + margen
+        );
+
         int minX = (int) Math.floor(hitbox.minX);
         int maxX = (int) Math.floor(hitbox.maxX);
         int minY = (int) Math.floor(hitbox.minY);
@@ -634,6 +708,20 @@ public class AutoWalker {
                     for (AABB cajaBloque : forma.toAabbs()) {
                         AABB cajaReal = cajaBloque.move(bx, by, bz);
                         if (cajaReal.intersects(hitbox)) {
+                            double alturaBloque = forma.max(Direction.Axis.Y);
+                            
+                            if (alturaBloque > ALTURA_PISABLE && alturaBloque <= 1.0) {
+                                BlockPos cabezaPos = bpos.above();
+                                BlockState estadoCabeza = client.level.getBlockState(cabezaPos);
+                                
+                                boolean cabezaLibre = esBloqueNoSolido(estadoCabeza)
+                                        || estadoCabeza.getCollisionShape(client.level, cabezaPos).isEmpty();
+                                
+                                if (cabezaLibre) {
+                                    continue;
+                                }
+                            }
+                            
                             return true;
                         }
                     }
@@ -742,16 +830,7 @@ public class AutoWalker {
             double checkZ = player.getZ() + forwardZ * distanciaIntermedia;
             double checkY = player.getY();
 
-            AABB hitbox = new AABB(
-                    checkX - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                    checkY,
-                    checkZ - ANCHO_JUGADOR / 2 - MARGEN_LATERAL,
-                    checkX + ANCHO_JUGADOR / 2 + MARGEN_LATERAL,
-                    checkY + ALTURA_JUGADOR,
-                    checkZ + ANCHO_JUGADOR / 2 + MARGEN_LATERAL
-            );
-
-            if (hayColisionEnHitbox(client, hitbox)) {
+            if (hayColisionNoEscalable(client, checkX, checkY, checkZ, MARGEN_LATERAL)) {
                 return false;
             }
 
@@ -781,6 +860,7 @@ public class AutoWalker {
 
     private boolean iniciarDesvioSeguro(Minecraft client, LocalPlayer player, double dx, double dz) {
         if (intentosDesvio >= MAX_INTENTOS_DESVIO) {
+            debug("iniciarDesvioSeguro: agotados intentos (" + intentosDesvio + "/" + MAX_INTENTOS_DESVIO + ")");
             return false;
         }
 
@@ -796,6 +876,7 @@ public class AutoWalker {
             return true;
         }
 
+        debug("iniciarDesvioSeguro: ningún ángulo seguro en ningún lado");
         return false;
     }
 
@@ -805,6 +886,8 @@ public class AutoWalker {
             float yawDesviado = normalizarAngulo(yawObjetivo + (angulo * lado));
 
             if (direccionApuntaAPrecipicio(client, player, yawDesviado)) {
+                debug("  Ángulo " + String.format("%.0f", angulo) + "° lado " + lado
+                        + ": apunta a precipicio, descartado");
                 continue;
             }
 
@@ -814,7 +897,11 @@ public class AutoWalker {
                 desvioTicks = DURACION_DESVIO_TICKS;
                 anguloDesvioActual = angulo;
                 ultimaDireccionDesvio = -lado;
+                debug("  Ángulo " + String.format("%.0f", angulo) + "° lado " + lado + ": SEGURO");
                 return true;
+            } else {
+                debug("  Ángulo " + String.format("%.0f", angulo) + "° lado " + lado
+                        + ": no seguro");
             }
         }
         return false;
