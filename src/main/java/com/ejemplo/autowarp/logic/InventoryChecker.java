@@ -38,6 +38,12 @@ public class InventoryChecker {
     /** Distancia a la que se considera que Baritone ha llegado al destino. */
     private static final double DISTANCIA_LLEGADA_BARITONE = 2.0;
 
+    /** Ticks de espera máxima para que carguen los chunks (5 segundos). */
+    private static final int ESPERA_CHUNKS_MAXIMA_TICKS = 100;
+
+    /** Distancia mínima en chunks que deben estar cargados alrededor del destino. */
+    private static final int CHUNKS_RADIO_DESTINO = 1;
+
     private int contadorTicks = 0;
     private int throttleCounter = 0;
     private boolean inventarioLlenoAnterior = false;
@@ -61,6 +67,12 @@ public class InventoryChecker {
     private double targetBaritoneX, targetBaritoneY, targetBaritoneZ;
     private boolean navegandoConBaritone = false;
 
+    /** Contador de ticks esperando que carguen los chunks del destino. */
+    private int esperandoChunksDestino = -1;
+
+    /** Coordenadas del destino que estamos esperando. */
+    private double destinoPendienteX, destinoPendienteY, destinoPendienteZ;
+
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
         if (cfg == null || !cfg.modActivado || !cfg.checkeoActivo) {
@@ -79,6 +91,27 @@ public class InventoryChecker {
 
         // Comprobar llegada de Baritone siempre
         comprobarLlegadaBaritone(client, player);
+
+        // === ESPERA DE CARGA DE CHUNKS DEL DESTINO ===
+        if (esperandoChunksDestino >= 0) {
+            esperandoChunksDestino++;
+
+            if (chunksAlrededorCargados(destinoPendienteX, destinoPendienteZ)) {
+                System.out.println("[AutoWarp] Chunks cargados. Iniciando Baritone.");
+                esperandoChunksDestino = -1;
+                navegandoConBaritone = true;
+                navegarConBaritone(destinoPendienteX, destinoPendienteZ);
+                return;
+            }
+
+            if (esperandoChunksDestino >= ESPERA_CHUNKS_MAXIMA_TICKS) {
+                System.out.println("[AutoWarp] Timeout esperando chunks. Intentando navegar igualmente.");
+                esperandoChunksDestino = -1;
+                navegandoConBaritone = true;
+                navegarConBaritone(destinoPendienteX, destinoPendienteZ);
+            }
+            return;
+        }
 
         if (esperandoMensajeError) {
             procesarInteraccion(client, player);
@@ -157,6 +190,30 @@ public class InventoryChecker {
 
     /**
      * Inicia la navegación con Baritone hacia las coordenadas dadas.
+     * Primero espera a que los chunks del destino estén cargados.
+     */
+    private void iniciarNavegacionBaritone(double x, double y, double z) {
+        this.targetBaritoneX = x;
+        this.targetBaritoneY = y;
+        this.targetBaritoneZ = z;
+
+        // Verificar si los chunks alrededor del destino están cargados
+        if (!chunksAlrededorCargados(x, z)) {
+            this.esperandoChunksDestino = 0;
+            this.destinoPendienteX = x;
+            this.destinoPendienteY = y;
+            this.destinoPendienteZ = z;
+            System.out.println("[AutoWarp] Esperando carga de chunks alrededor del destino (" + (int) x + ", " + (int) z + ")...");
+            return;
+        }
+
+        // Chunks cargados: iniciar navegación
+        this.navegandoConBaritone = true;
+        navegarConBaritone(x, z);
+    }
+
+    /**
+     * Inicia la navegación con Baritone hacia las coordenadas dadas.
      */
     private void navegarConBaritone(double x, double z) {
         try {
@@ -166,7 +223,7 @@ public class InventoryChecker {
             // Configurar Baritone para que corra
             BaritoneAPI.getSettings().allowSprint.value = true;
 
-            System.out.println("[AutoWarp] Baritone: navegando hacia (" + x + ", " + z + ")");
+            System.out.println("[AutoWarp] Baritone: navegando hacia (" + (int) x + ", " + (int) z + ")");
         } catch (Exception e) {
             System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
         }
@@ -202,20 +259,30 @@ public class InventoryChecker {
     }
 
     /**
-     * Inicia la navegación con Baritone y programa la detección de llegada.
+     * Comprueba si los chunks alrededor de una posición XZ están cargados.
+     * Verifica un radio de CHUNKS_RADIO_DESTINO chunks.
      */
-    private void iniciarNavegacionBaritone(double x, double y, double z) {
-        this.targetBaritoneX = x;
-        this.targetBaritoneY = y;
-        this.targetBaritoneZ = z;
-        this.navegandoConBaritone = true;
+    private boolean chunksAlrededorCargados(double x, double z) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.level == null) return false;
 
-        navegarConBaritone(x, z);
+        int chunkX = (int) Math.floor(x) >> 4;
+        int chunkZ = (int) Math.floor(z) >> 4;
+
+        for (int dx = -CHUNKS_RADIO_DESTINO; dx <= CHUNKS_RADIO_DESTINO; dx++) {
+            for (int dz = -CHUNKS_RADIO_DESTINO; dz <= CHUNKS_RADIO_DESTINO; dz++) {
+                var chunk = client.level.getChunkSource()
+                        .getChunk(chunkX + dx, chunkZ + dz, false);
+                if (chunk == null) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /**
      * Comprueba si Baritone ha terminado de navegar.
-     * Se llama cada tick desde el método tick() principal.
      */
     private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
         if (!navegandoConBaritone || player == null) return;
@@ -224,7 +291,6 @@ public class InventoryChecker {
         double dz = targetBaritoneZ - player.getZ();
         double distancia = Math.sqrt(dx * dx + dz * dz);
 
-        // Si Baritone ya no navega O estamos cerca del destino
         if (!baritoneNavegando() || distancia < DISTANCIA_LLEGADA_BARITONE) {
             System.out.println("[AutoWarp] Baritone ha llegado o terminado. Distancia: " + distancia);
             navegandoConBaritone = false;
@@ -288,7 +354,6 @@ public class InventoryChecker {
 
         cartelActual = null;
 
-        // Cancelar Baritone si está activo
         cancelarBaritone();
         navegandoConBaritone = false;
 
@@ -545,7 +610,6 @@ public class InventoryChecker {
                 "[AutoWarp] Navegando con Baritone hacia el cartel " + elegida + " ("
                 + (int) distancia + " bloques)."));
 
-        // Iniciar navegación con Baritone
         iniciarNavegacionBaritone(elegida.x, elegida.y, elegida.z);
     }
 
