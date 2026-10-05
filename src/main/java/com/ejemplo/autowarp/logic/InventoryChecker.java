@@ -36,13 +36,34 @@ public class InventoryChecker {
     private static final int MAX_INTENTOS_CLICK = 30;
     private static final int TICKS_ENTRE_CLICKS = 10;
 
-    private static final double DISTANCIA_LLEGADA = 1.5;
-    private static final double DISTANCIA_WARP_COMPLETADO = 50.0;
-    private static final int ESPERA_WARP_MAXIMA_TICKS = 200;
-    private static final int MAX_TICKS_CAMINANDO = 20 * 60; // 60 segundos
+    /** Distancia a la que se considera que el jugador ha llegado (precisión 0.1). */
+    private static final double DISTANCIA_LLEGADA = 0.1;
 
+    /** Distancia por debajo de la cual se hace ajuste fino. */
+    private static final double DISTANCIA_AJUSTE_FINO = 1.5;
+
+    /** Distancia para considerar que el warp se completó. */
+    private static final double DISTANCIA_WARP_COMPLETADO = 50.0;
+
+    /** Ticks máximos esperando a que el warp se complete (10 segundos). */
+    private static final int ESPERA_WARP_MAXIMA_TICKS = 200;
+
+    /** Ticks máximos caminando hacia un destino antes de rendirse. */
+    private static final int MAX_TICKS_CAMINANDO = 20 * 60;
+
+    /** Diferencia máxima de rotación para considerar que mira al objetivo. */
     private static final float UMBRAL_ALINEACION = 10.0f;
+
+    /** Umbral de alineación estricto cuando estamos cerca del destino. */
+    private static final float UMBRAL_ALINEACION_CERCA = 3.0f;
+
+    /** Velocidad de rotación por tick. */
     private static final float VELOCIDAD_ROTACION = 30.0f;
+
+    /** Velocidad de rotación reducida cerca del destino. */
+    private static final float VELOCIDAD_ROTACION_CERCA = 15.0f;
+
+    /** Ticks que se mantiene pulsado el salto al chocar con un bloque saltable. */
     private static final int DURACION_SALTO_TICKS = 8;
 
     /** Duración de un desvío lateral en ticks. */
@@ -52,7 +73,7 @@ public class InventoryChecker {
     private static final int ESPERA_TRAS_DESVIO_TICKS = 5;
 
     /** Ticks máximos intentando rodear sin progreso antes de rendirse. */
-    private static final int MAX_TICKS_SIN_PROGRESO = 20 * 15; // 15 segundos
+    private static final int MAX_TICKS_SIN_PROGRESO = 20 * 15;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -81,19 +102,19 @@ public class InventoryChecker {
     private int saltoTicks = 0;
     private boolean destinoEsAutofarm = false;
 
-    /** Estado del desvío: 0 = no desviando, 1 = izquierda, -1 = derecha. */
     private int estadoDesvio = 0;
     private int desvioTicks = 0;
     private int esperaTrasDesvioTicks = 0;
-
-    /** Última dirección de desvío usada, para alternar. */
     private int ultimaDireccionDesvio = 1;
 
-    /** Distancia al destino en el tick anterior, para detectar progreso. */
     private double distanciaAnterior = Double.MAX_VALUE;
-
-    /** Ticks sin reducir la distancia al destino. */
     private int ticksSinProgreso = 0;
+
+    /** Distancia al destino en el tick anterior para ajuste fino. */
+    private double distanciaAnteriorAjuste = Double.MAX_VALUE;
+
+    /** Ticks consecutivos alejándose del destino. */
+    private int ticksAlejandose = 0;
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
@@ -111,10 +132,8 @@ public class InventoryChecker {
             return;
         }
 
-        // Caminata activa (prioridad)
         procesarCaminata(client);
 
-        // Espera del warp de autofarm
         if (esperandoWarpAutofarm >= 0) {
             esperandoWarpAutofarm++;
 
@@ -211,7 +230,7 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // CAMINATA CON RODEO
+    // CAMINATA CON RODEO Y AJUSTE FINO
     // =====================================================
 
     private void iniciarCaminata(double x, double y, double z, boolean esAutofarm) {
@@ -228,6 +247,8 @@ public class InventoryChecker {
         this.ultimaDireccionDesvio = 1;
         this.distanciaAnterior = Double.MAX_VALUE;
         this.ticksSinProgreso = 0;
+        this.distanciaAnteriorAjuste = Double.MAX_VALUE;
+        this.ticksAlejandose = 0;
     }
 
     private void procesarCaminata(Minecraft client) {
@@ -252,11 +273,11 @@ public class InventoryChecker {
         double dz = destinoZ - player.getZ();
         double distanciaHorizontal = Math.sqrt(dx * dx + dz * dz);
 
-        // ¿Llegamos?
+        // ¿Llegamos con precisión?
         if (distanciaHorizontal <= DISTANCIA_LLEGADA) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Destino alcanzado. Distancia: "
-                    + String.format("%.2f", distanciaHorizontal)));
+                    + String.format("%.3f", distanciaHorizontal)));
             detenerCaminata(client);
 
             if (destinoEsAutofarm) {
@@ -275,13 +296,38 @@ public class InventoryChecker {
             ticksSinProgreso++;
         }
 
-        // Si llevamos mucho sin progresar, rendirse
         if (ticksSinProgreso > MAX_TICKS_SIN_PROGRESO) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Sin progreso durante demasiado tiempo. Deteniendo caminata."));
             detenerCaminata(client);
             return;
         }
+
+        // === DETECCIÓN DE SOBREPASO EN AJUSTE FINO ===
+        if (distanciaHorizontal < DISTANCIA_AJUSTE_FINO) {
+            if (distanciaHorizontal > distanciaAnteriorAjuste + 0.005) {
+                ticksAlejandose++;
+            } else {
+                ticksAlejandose = 0;
+            }
+
+            if (ticksAlejandose >= 3) {
+                client.options.keyUp.setDown(false);
+                client.options.keySprint.setDown(false);
+                client.options.keyDown.setDown(true);
+                client.options.keyJump.setDown(false);
+
+                if (ticksAlejandose >= 5) {
+                    client.options.keyDown.setDown(false);
+                    ticksAlejandose = 0;
+                }
+                distanciaAnteriorAjuste = distanciaHorizontal;
+                return;
+            }
+        } else {
+            ticksAlejandose = 0;
+        }
+        distanciaAnteriorAjuste = distanciaHorizontal;
 
         // Fase de espera tras desvío
         if (esperaTrasDesvioTicks > 0) {
@@ -301,19 +347,25 @@ public class InventoryChecker {
             return;
         }
 
-        // === AVANCE NORMAL HACIA EL OBJETIVO ===
+        // === ROTACIÓN HACIA EL OBJETIVO ===
         float yawObjetivo = (float) Math.toDegrees(Math.atan2(-dx, dz));
         float yawActual = player.getYRot();
         float diferencia = normalizarAngulo(yawObjetivo - yawActual);
 
-        if (Math.abs(diferencia) > VELOCIDAD_ROTACION) {
-            yawActual += (diferencia > 0 ? VELOCIDAD_ROTACION : -VELOCIDAD_ROTACION);
+        boolean cerca = distanciaHorizontal < DISTANCIA_AJUSTE_FINO;
+
+        float velocidadRotacion = cerca ? VELOCIDAD_ROTACION_CERCA : VELOCIDAD_ROTACION;
+
+        if (Math.abs(diferencia) > velocidadRotacion) {
+            yawActual += (diferencia > 0 ? velocidadRotacion : -velocidadRotacion);
         } else {
             yawActual = yawObjetivo;
         }
         player.setYRot(yawActual);
 
-        if (Math.abs(normalizarAngulo(yawObjetivo - player.getYRot())) > UMBRAL_ALINEACION) {
+        float umbralAlineacion = cerca ? UMBRAL_ALINEACION_CERCA : UMBRAL_ALINEACION;
+
+        if (Math.abs(normalizarAngulo(yawObjetivo - player.getYRot())) > umbralAlineacion) {
             client.options.keyUp.setDown(false);
             client.options.keySprint.setDown(false);
             return;
@@ -324,14 +376,14 @@ public class InventoryChecker {
             saltoTicks--;
             client.options.keyJump.setDown(true);
             client.options.keyUp.setDown(true);
-            client.options.keySprint.setDown(true);
+            client.options.keySprint.setDown(!cerca);
             if (saltoTicks == 0) {
                 client.options.keyJump.setDown(false);
             }
             return;
         }
 
-        // Detección de obstáculo delante (ignorando carteles y losas)
+        // Detección de obstáculo delante
         double yawRad = Math.toRadians(player.getYRot());
         double forwardX = -Math.sin(yawRad);
         double forwardZ = Math.cos(yawRad);
@@ -346,61 +398,43 @@ public class InventoryChecker {
         BlockState estadoPies = client.level.getBlockState(piesDelante);
         BlockState estadoCabeza = client.level.getBlockState(cabezaDelante);
 
-        // Comprobar si hay obstáculo real (ignorando carteles y bloques no sólidos)
         boolean piesBloqueado = esBloqueObstaculo(client, piesDelante, estadoPies);
         boolean cabezaBloqueada = esBloqueObstaculo(client, cabezaDelante, estadoCabeza);
 
         if (cabezaBloqueada) {
-            // Obstáculo a la altura de la cabeza: desviar
             iniciarDesvio(client, player, dx, dz);
             return;
         }
 
         if (piesBloqueado) {
-            // Obstáculo a la altura de los pies pero cabeza libre: saltar
             saltoTicks = DURACION_SALTO_TICKS;
             client.options.keyJump.setDown(true);
             client.options.keyUp.setDown(true);
-            client.options.keySprint.setDown(true);
+            client.options.keySprint.setDown(!cerca);
             return;
         }
 
-        // Todo despejado: avanzar
+        // Todo despejado: avanzar. Sin sprint si estamos cerca.
         client.options.keyUp.setDown(true);
-        client.options.keySprint.setDown(true);
+        client.options.keySprint.setDown(!cerca);
     }
 
-    /**
-     * Comprueba si un bloque es un obstáculo real para el jugador.
-     * Ignora carteles, bloques no sólidos y bloques pisables (losas).
-     */
     private boolean esBloqueObstaculo(Minecraft client, BlockPos pos, BlockState estado) {
-        // Aire no es obstáculo
         if (estado.isAir()) return false;
-
-        // Carteles y bloques no sólidos no son obstáculos
         if (esBloqueNoSolido(estado)) return false;
 
-        // Bloques pisables (losas, alfombras) no son obstáculos
         VoxelShape forma = estado.getCollisionShape(client.level, pos);
         if (forma.isEmpty()) return false;
 
         double altura = forma.max(Direction.Axis.Y);
-        if (altura < 0.5) return false; // Alfombras, placas
+        if (altura < 0.5) return false;
 
-        // Losas (altura 0.5) no bloquean al jugador
         if (estado.is(BlockTags.SLABS)) return false;
 
-        // Cualquier otra cosa con colisión es obstáculo
         return true;
     }
 
-    /**
-     * Inicia un desvío para rodear el obstáculo.
-     * Intenta primero el lado que más acerque al objetivo.
-     */
     private void iniciarDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
-        // Probar ambos lados y elegir el que más acerque al objetivo
         int ladoElegido = elegirMejorLadoDesvio(client, player, dx, dz);
 
         estadoDesvio = ladoElegido;
@@ -414,17 +448,14 @@ public class InventoryChecker {
 
         if (ladoElegido > 0) {
             client.options.keyLeft.setDown(true);
+            client.options.keyRight.setDown(false);
         } else {
             client.options.keyRight.setDown(true);
+            client.options.keyLeft.setDown(false);
         }
     }
 
-    /**
-     * Elige el lado del desvío que más acerque al objetivo.
-     * Devuelve 1 para izquierda, -1 para derecha.
-     */
     private int elegirMejorLadoDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
-        // Probar primero el último lado usado (alternancia)
         int ladoPrimero = ultimaDireccionDesvio;
         int ladoSegundo = -ultimaDireccionDesvio;
 
@@ -434,13 +465,9 @@ public class InventoryChecker {
         if (ladoDesvioEsSeguro(client, player, ladoSegundo)) {
             return ladoSegundo;
         }
-        // Si ninguno es seguro, usar el que toque
         return ladoPrimero;
     }
 
-    /**
-     * Comprueba si un lado es seguro para desviar (hay suelo).
-     */
     private boolean ladoDesvioEsSeguro(Minecraft client, LocalPlayer player, int lado) {
         double yawRad = Math.toRadians(player.getYRot() + 90 * lado);
         double sideX = -Math.sin(yawRad);
@@ -453,17 +480,12 @@ public class InventoryChecker {
         BlockPos pos = BlockPos.containing(checkX, checkY - 0.1, checkZ);
         BlockState estado = client.level.getBlockState(pos);
 
-        // Hay que tener suelo debajo
         return !estado.isAir();
     }
 
-    /**
-     * Procesa el desvío lateral en curso.
-     */
     private void procesarDesvio(Minecraft client, LocalPlayer player, double dx, double dz) {
         desvioTicks--;
 
-        // Detectar si el desvío se completó (ya no hay obstáculo delante)
         if (desvioTicks <= 0) {
             estadoDesvio = 0;
             esperaTrasDesvioTicks = ESPERA_TRAS_DESVIO_TICKS;
@@ -472,7 +494,6 @@ public class InventoryChecker {
             return;
         }
 
-        // Mantener la tecla de desvío pulsada
         if (estadoDesvio > 0) {
             client.options.keyLeft.setDown(true);
             client.options.keyRight.setDown(false);
@@ -481,7 +502,6 @@ public class InventoryChecker {
             client.options.keyLeft.setDown(false);
         }
 
-        // También avanzar un poco hacia el objetivo mientras se desvía
         client.options.keyUp.setDown(true);
         client.options.keySprint.setDown(false);
     }
@@ -494,6 +514,7 @@ public class InventoryChecker {
         desvioTicks = 0;
         esperaTrasDesvioTicks = 0;
         ticksSinProgreso = 0;
+        ticksAlejandose = 0;
 
         if (client != null && client.options != null) {
             client.options.keyUp.setDown(false);
@@ -511,10 +532,6 @@ public class InventoryChecker {
         return angulo;
     }
 
-    /**
-     * Determina si un bloque es no sólido (no debe considerarse obstáculo).
-     * Carteles, pancartas, antorchas y otros bloques decorativos.
-     */
     private boolean esBloqueNoSolido(BlockState estado) {
         if (estado.getBlock() instanceof SignBlock) return true;
         if (estado.is(BlockTags.BANNERS)) return true;
