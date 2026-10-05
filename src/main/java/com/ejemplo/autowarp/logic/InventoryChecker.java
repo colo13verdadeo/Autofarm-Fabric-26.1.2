@@ -3,6 +3,7 @@ package com.ejemplo.autowarp.logic;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalXZ;
+import com.ejemplo.autowarp.compat.KillAuraCompat;
 import com.ejemplo.autowarp.config.AutoWarpConfig;
 import com.ejemplo.autowarp.config.CoordStorage;
 import net.minecraft.client.Minecraft;
@@ -55,14 +56,9 @@ public class InventoryChecker {
     private static final int ESPERA_TRAS_DESVIO_TICKS = 5;
     private static final int MAX_TICKS_SIN_PROGRESO = 20 * 15;
 
-    /** Distancia a la que se considera que Baritone ha llegado al destino. */
     private static final double DISTANCIA_LLEGADA_BARITONE = 2.0;
-
-    /** Ticks de gracia tras iniciar Baritone antes de comprobar llegada. */
     private static final int GRACIA_BARITONE_TICKS = 40;
-
-    /** Ticks máximos esperando a Baritone para que encuentre ruta. */
-    private static final int MAX_TICKS_ESPERANDO_BARITONE = 20 * 120; // 2 minutos
+    private static final int MAX_TICKS_ESPERANDO_BARITONE = 20 * 120;
 
     private int contadorTicks = 0;
     private int throttleCounter = 0;
@@ -91,7 +87,6 @@ public class InventoryChecker {
     private int saltoTicks = 0;
     private boolean destinoEsAutofarm = false;
 
-    /** Indica si el destino actual usa Baritone (modo seguro) o caminata recta (modo inseguro). */
     private boolean usandoBaritone = false;
 
     private int estadoDesvio = 0;
@@ -105,14 +100,14 @@ public class InventoryChecker {
     private double distanciaAnteriorAjuste = Double.MAX_VALUE;
     private int ticksAlejandose = 0;
 
-    /** Coordenadas objetivo de Baritone. */
     private double targetBaritoneX, targetBaritoneY, targetBaritoneZ;
 
-    /** Ticks de gracia tras iniciar Baritone. */
     private int graciaBaritone = 0;
 
-    /** Ticks que llevamos esperando a Baritone. */
     private int ticksEsperandoBaritone = 0;
+
+    /** Indica si KillAura estaba activado antes de desactivarlo. */
+    private boolean killauraEstabaActivo = false;
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
@@ -134,13 +129,11 @@ public class InventoryChecker {
             return;
         }
 
-        // === BARITONE ACTIVO (modo seguro) ===
         if (usandoBaritone) {
             comprobarLlegadaBaritone(client, player);
             return;
         }
 
-        // === CAMINATA RECTA (modo inseguro) ===
         procesarCaminata(client);
 
         if (esperandoWarpAutofarm >= 0) {
@@ -239,18 +232,12 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // INICIAR NAVEGACIÓN (decide Baritone vs caminata recta)
+    // INICIAR NAVEGACIÓN
     // =====================================================
 
-    /**
-     * Inicia la navegación hacia el destino.
-     * Si el destino requiere modo seguro → usa Baritone.
-     * Si el destino requiere modo inseguro → usa caminata recta.
-     */
     private void iniciarNavegacion(double x, double y, double z, boolean esAutofarm) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
 
-        // Determinar qué modo usar según el tipo de destino
         boolean zonaSegura;
         if (esAutofarm) {
             zonaSegura = cfg != null && cfg.zonaSeguraPostCarteles;
@@ -264,50 +251,47 @@ public class InventoryChecker {
         this.destinoEsAutofarm = esAutofarm;
 
         if (zonaSegura) {
-            // MODO SEGURO: usar Baritone
             this.usandoBaritone = true;
             this.caminando = false;
             iniciarBaritone(x, y, z, esAutofarm);
         } else {
-            // MODO INSEGURO: caminar recto
             this.usandoBaritone = false;
             iniciarCaminata(x, y, z, esAutofarm);
         }
     }
 
     // =====================================================
-    // BARITONE (modo seguro)
+    // BARITONE
     // =====================================================
 
-private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
-    this.targetBaritoneX = x;
-    this.targetBaritoneY = y;
-    this.targetBaritoneZ = z;
-    this.graciaBaritone = GRACIA_BARITONE_TICKS;
-    this.ticksEsperandoBaritone = 0;
+    private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
+        this.targetBaritoneX = x;
+        this.targetBaritoneY = y;
+        this.targetBaritoneZ = z;
+        this.graciaBaritone = GRACIA_BARITONE_TICKS;
+        this.ticksEsperandoBaritone = 0;
 
-    try {
-        IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
-        baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ((int) x, (int) z));
-        BaritoneAPI.getSettings().allowSprint.value = true;
+        try {
+            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ((int) x, (int) z));
+            BaritoneAPI.getSettings().allowSprint.value = true;
 
-        Minecraft client = Minecraft.getInstance();
-        if (client.player != null) {
-            client.player.sendSystemMessage(Component.literal(
-                    "[AutoWarp] (Modo seguro) Baritone navegando hacia ("
-                    + (int) x + ", " + (int) z + ")"));
+            Minecraft client = Minecraft.getInstance();
+            if (client.player != null) {
+                client.player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] (Modo seguro) Baritone navegando hacia ("
+                        + (int) x + ", " + (int) z + ")"));
+            }
+        } catch (Exception e) {
+            System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
+            this.usandoBaritone = false;
+            iniciarCaminata(x, y, z, esAutofarm);
         }
-    } catch (Exception e) {
-        System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
-        this.usandoBaritone = false;
-        iniciarCaminata(x, y, z, esAutofarm);
     }
-}
 
     private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
         if (!usandoBaritone || player == null) return;
 
-        // Gracia inicial
         if (graciaBaritone > 0) {
             graciaBaritone--;
             return;
@@ -315,12 +299,9 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
 
         ticksEsperandoBaritone++;
 
-        // Timeout: si Baritone tarda demasiado, cancelar y caminar recto
         if (ticksEsperandoBaritone > MAX_TICKS_ESPERANDO_BARITONE) {
-            if (player != null) {
-                player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Baritone tardó demasiado. Cambiando a caminata recta."));
-            }
+            player.sendSystemMessage(Component.literal(
+                    "[AutoWarp] Baritone tardó demasiado. Cambiando a caminata recta."));
             cancelarBaritone();
             this.usandoBaritone = false;
             iniciarCaminata(targetBaritoneX, targetBaritoneY, targetBaritoneZ, destinoEsAutofarm);
@@ -333,7 +314,6 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
 
         boolean baritoneActivo = baritoneNavegando();
 
-        // ¿Baritone terminó y estamos cerca?
         if (!baritoneActivo && distancia < DISTANCIA_LLEGADA_BARITONE) {
             player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Baritone llegó al destino. Distancia: "
@@ -371,7 +351,7 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
     }
 
     // =====================================================
-    // CAMINATA RECTA (modo inseguro)
+    // CAMINATA RECTA (MODO INSEGURO)
     // =====================================================
 
     private void iniciarCaminata(double x, double y, double z, boolean esAutofarm) {
@@ -449,7 +429,6 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
             return;
         }
 
-        // Detección de sobrepaso
         if (distanciaHorizontal < DISTANCIA_AJUSTE_FINO) {
             if (distanciaHorizontal > distanciaAnteriorAjuste + 0.005) {
                 ticksAlejandose++;
@@ -698,6 +677,9 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
             client.player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Interactuando con el cartel..."));
         }
+
+        // Reactivar KillAura al llegar al cartel
+        reactivarKillAura();
     }
 
     private void onLlegadaAutofarm(int x, int y, int z) {
@@ -711,6 +693,25 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
             }
             client.player.sendSystemMessage(Component.literal(
                     "[AutoWarp] Autofarm alcanzado. Navegación finalizada."));
+        }
+
+        // Reactivar KillAura al llegar
+        reactivarKillAura();
+    }
+
+    /**
+     * Reactiva KillAura si estaba activado antes de desactivarlo.
+     */
+    private void reactivarKillAura() {
+        if (killauraEstabaActivo) {
+            KillAuraCompat.setEnabled(true);
+            killauraEstabaActivo = false;
+
+            Minecraft client = Minecraft.getInstance();
+            if (client.player != null) {
+                client.player.sendSystemMessage(Component.literal(
+                        "[AutoWarp] KillAura reactivado."));
+            }
         }
     }
 
@@ -884,7 +885,11 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
 
             if (cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Autofarm activado. Esperando a que el warp se complete..."));
+                        "[AutoWarp] Autofarm activado. Desactivando KillAura y esperando warp..."));
+
+                // Desactivar KillAura durante la navegación, recordando su estado
+                killauraEstabaActivo = KillAuraCompat.isEnabled();
+                KillAuraCompat.setEnabled(false);
 
                 this.esperandoWarpAutofarm = 0;
                 this.destinoX = cfg.autofarmX;
@@ -902,7 +907,11 @@ private void iniciarBaritone(double x, double y, double z, boolean esAutofarm) {
 
             if (cfg != null && cfg.autofarmActivado && cfg.autofarmCapturado) {
                 player.sendSystemMessage(Component.literal(
-                        "[AutoWarp] Autofarm activado. Esperando a que el warp se complete..."));
+                        "[AutoWarp] Autofarm activado. Desactivando KillAura y esperando warp..."));
+
+                // Desactivar KillAura durante la navegación
+                killauraEstabaActivo = KillAuraCompat.isEnabled();
+                KillAuraCompat.setEnabled(false);
 
                 this.esperandoWarpAutofarm = 0;
                 this.destinoX = cfg.autofarmX;

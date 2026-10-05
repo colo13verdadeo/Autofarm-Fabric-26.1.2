@@ -37,12 +37,12 @@ public class AutoWarpMod implements ClientModInitializer {
                 CATEGORY
         ));
 
-        // === LIMPIAR MARCAS AL CONECTAR ===
+        // Limpiar marcas al conectar
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             CoordStorage.limpiarMarcasSesion();
         });
 
-        // === LISTENER DE MENSAJES DE CHAT ===
+        // Listener de chat
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             if (overlay) return;
 
@@ -52,6 +52,7 @@ public class AutoWarpMod implements ClientModInitializer {
             }
         });
 
+        // Tick del cliente
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (abrirConfigKey.consumeClick()) {
                 if (client.screen == null) {

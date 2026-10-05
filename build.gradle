@@ -12,6 +12,11 @@ base {
 
 repositories {
     mavenCentral()
+    // Añade el repositorio donde está publicado KillAura
+    // (ajusta la URL según dónde lo tengas)
+    flatDir {
+        dirs 'libs'
+    }
 }
 
 processResources {
@@ -27,8 +32,11 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    // Baritone API desde JAR local (no se empaqueta en el mod final)
+    // Baritone local
     compileOnly files("libs/baritone-api-fabric-1.18.0.jar")
+
+    // KillAura API (solo compilación, no se empaqueta)
+    compileOnly files("libs/killaura-1.0.0.jar")
 }
 
 tasks.withType(JavaCompile).configureEach {

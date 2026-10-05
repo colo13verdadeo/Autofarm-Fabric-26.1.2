@@ -3,7 +3,7 @@
   "id": "autowarp",
   "version": "1.0.0",
   "name": "Auto Warp",
-  "description": "Ejecuta /warp shop automáticamente cuando el inventario está lleno.",
+  "description": "Ejecuta /warp shop y navega automáticamente.",
   "authors": ["Tu Nombre"],
   "license": "MIT",
   "environment": "client",
@@ -15,7 +15,9 @@
   "depends": {
     "fabricloader": ">=0.19.3",
     "minecraft": "26.1.2",
-    "fabric-api": "*",
-    "baritone": "*"
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "killaura": "*"
   }
 }
