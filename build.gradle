@@ -12,7 +12,6 @@ base {
 
 repositories {
     mavenCentral()
-    maven { url 'https://maven.meteordev.org/releases' } // Repositorio de Baritone
 }
 
 processResources {
@@ -28,8 +27,8 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    // Baritone API (implementation, ya que Loom 1.15+ no remapea mods en 26.1)
-    implementation "meteordevelopment:baritone:${project.baritone_version}-SNAPSHOT"
+    // Baritone API desde JAR local (no se empaqueta en el mod final)
+    compileOnly files("libs/baritone-api-fabric-1.18.0.jar")
 }
 
 tasks.withType(JavaCompile).configureEach {

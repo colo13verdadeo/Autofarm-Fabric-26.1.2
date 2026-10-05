@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "killaura-mod"
+rootProject.name = "autofarm-mod"

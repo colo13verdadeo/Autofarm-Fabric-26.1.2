@@ -1,6 +1,7 @@
 package com.ejemplo.autowarp.logic;
 
 import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalXZ;
 import com.ejemplo.autowarp.config.AutoWarpConfig;
 import com.ejemplo.autowarp.config.CoordStorage;
@@ -34,6 +35,9 @@ public class InventoryChecker {
     private static final int MAX_INTENTOS_CLICK = 30;
     private static final int TICKS_ENTRE_CLICKS = 10;
 
+    /** Distancia a la que se considera que Baritone ha llegado al destino. */
+    private static final double DISTANCIA_LLEGADA_BARITONE = 2.0;
+
     private int contadorTicks = 0;
     private int throttleCounter = 0;
     private boolean inventarioLlenoAnterior = false;
@@ -51,12 +55,11 @@ public class InventoryChecker {
 
     private CoordStorage.Coordenada cartelActual = null;
 
-    /** Flag para saber si tras la espera post-comando hay que ir a autofarm. */
     private boolean irAAutofarmTrasEspera = false;
 
-    public InventoryChecker() {
-        // No necesitamos callback de AutoWalker, Baritone gestiona la navegación
-    }
+    /** Coordenadas objetivo de la navegación actual con Baritone. */
+    private double targetBaritoneX, targetBaritoneY, targetBaritoneZ;
+    private boolean navegandoConBaritone = false;
 
     public void tick(Minecraft client) {
         AutoWarpConfig cfg = AutoWarpConfig.get();
@@ -64,6 +67,7 @@ public class InventoryChecker {
             if (esperandoMensajeError && client.player != null) {
                 procesarInteraccion(client, client.player);
             }
+            comprobarLlegadaBaritone(client, client.player);
             return;
         }
 
@@ -72,6 +76,9 @@ public class InventoryChecker {
             resetear();
             return;
         }
+
+        // Comprobar llegada de Baritone siempre
+        comprobarLlegadaBaritone(client, player);
 
         if (esperandoMensajeError) {
             procesarInteraccion(client, player);
@@ -145,7 +152,93 @@ public class InventoryChecker {
     }
 
     // =====================================================
-    // CALLBACKS DE BARITONE
+    // BARITONE
+    // =====================================================
+
+    /**
+     * Inicia la navegación con Baritone hacia las coordenadas dadas.
+     */
+    private void navegarConBaritone(double x, double z) {
+        try {
+            IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+            baritone.getCustomGoalProcess().setGoalAndPath(new GoalXZ((int) x, (int) z));
+
+            // Configurar Baritone para que corra
+            BaritoneAPI.getSettings().allowSprint.value = true;
+
+            System.out.println("[AutoWarp] Baritone: navegando hacia (" + x + ", " + z + ")");
+        } catch (Exception e) {
+            System.err.println("[AutoWarp] Error al iniciar Baritone: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Cancela cualquier navegación de Baritone en curso.
+     */
+    private void cancelarBaritone() {
+        try {
+            BaritoneAPI.getProvider()
+                    .getPrimaryBaritone()
+                    .getPathingBehavior()
+                    .cancelEverything();
+            System.out.println("[AutoWarp] Baritone: navegación cancelada");
+        } catch (Exception e) {
+            System.err.println("[AutoWarp] Error al cancelar Baritone: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Comprueba si Baritone sigue navegando.
+     */
+    private boolean baritoneNavegando() {
+        try {
+            return BaritoneAPI.getProvider()
+                    .getPrimaryBaritone()
+                    .getPathingBehavior()
+                    .isPathing();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Inicia la navegación con Baritone y programa la detección de llegada.
+     */
+    private void iniciarNavegacionBaritone(double x, double y, double z) {
+        this.targetBaritoneX = x;
+        this.targetBaritoneY = y;
+        this.targetBaritoneZ = z;
+        this.navegandoConBaritone = true;
+
+        navegarConBaritone(x, z);
+    }
+
+    /**
+     * Comprueba si Baritone ha terminado de navegar.
+     * Se llama cada tick desde el método tick() principal.
+     */
+    private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
+        if (!navegandoConBaritone || player == null) return;
+
+        double dx = targetBaritoneX - player.getX();
+        double dz = targetBaritoneZ - player.getZ();
+        double distancia = Math.sqrt(dx * dx + dz * dz);
+
+        // Si Baritone ya no navega O estamos cerca del destino
+        if (!baritoneNavegando() || distancia < DISTANCIA_LLEGADA_BARITONE) {
+            System.out.println("[AutoWarp] Baritone ha llegado o terminado. Distancia: " + distancia);
+            navegandoConBaritone = false;
+
+            if (cartelActual != null) {
+                onLlegadaAlDestino((int) targetBaritoneX, (int) targetBaritoneY, (int) targetBaritoneZ);
+            } else {
+                onLlegadaAutofarm((int) targetBaritoneX, (int) targetBaritoneY, (int) targetBaritoneZ);
+            }
+        }
+    }
+
+    // =====================================================
+    // CALLBACKS
     // =====================================================
 
     private void onLlegadaAlDestino(int x, int y, int z) {
@@ -197,66 +290,11 @@ public class InventoryChecker {
 
         // Cancelar Baritone si está activo
         cancelarBaritone();
+        navegandoConBaritone = false;
 
         if (player != null) {
             intentarNavegacion(player);
         }
-    }
-
-    // =====================================================
-    // BARITONE
-    // =====================================================
-
-    /**
-     * Inicia la navegación con Baritone hacia las coordenadas dadas.
-     */
-    private void navegarConBaritone(int x, int z) {
-        try {
-            BaritoneAPI.getProvider()
-                    .getPrimaryBaritone()
-                    .getCustomGoalProcess()
-                    .setGoalAndPath(new GoalXZ(x, z));
-
-            // Configurar Baritone para que corra
-            BaritoneAPI.getSettings().allowSprint.value = true;
-
-            debug("Baritone: navegando hacia (" + x + ", " + z + ")");
-        } catch (Exception e) {
-            debug("Error al iniciar Baritone: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Cancela cualquier navegación de Baritone en curso.
-     */
-    private void cancelarBaritone() {
-        try {
-            BaritoneAPI.getProvider()
-                    .getPrimaryBaritone()
-                    .getPathingBehavior()
-                    .cancelEverything();
-            debug("Baritone: navegación cancelada");
-        } catch (Exception e) {
-            debug("Error al cancelar Baritone: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Comprueba si Baritone sigue navegando.
-     */
-    private boolean baritoneNavegando() {
-        try {
-            return BaritoneAPI.getProvider()
-                    .getPrimaryBaritone()
-                    .getPathingBehavior()
-                    .isPathing();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private void debug(String mensaje) {
-        System.out.println("[AutoWarp DEBUG] " + mensaje);
     }
 
     // =====================================================
@@ -421,12 +459,7 @@ public class InventoryChecker {
                         "[AutoWarp] Navegando a autofarm con Baritone ("
                         + (int) cfg.autofarmX + ", " + (int) cfg.autofarmZ + ")."));
 
-                // Navegar con Baritone (solo XZ, Y lo gestiona Baritone)
-                navegarConBaritone((int) cfg.autofarmX, (int) cfg.autofarmZ);
-
-                // Nota: Baritone no tiene callback nativo fácil, así que usamos un timer
-                // Para simplificar, el usuario tendrá que esperar a que Baritone termine
-                // y luego el código detectará que está cerca
+                iniciarNavegacionBaritone(cfg.autofarmX, cfg.autofarmY, cfg.autofarmZ);
                 return;
             }
         }
@@ -513,55 +546,7 @@ public class InventoryChecker {
                 + (int) distancia + " bloques)."));
 
         // Iniciar navegación con Baritone
-        navegarConBaritone((int) elegida.x, (int) elegida.z);
-
-        // Programar la llegada al destino (simplificado)
-        // Baritone no tiene un callback directo fácil, así que usamos un timer
-        // o comprobamos periódicamente la distancia
-        programarLlegadaBaritone(elegida.x, elegida.y, elegida.z);
-    }
-
-    /**
-     * Programa la detección de llegada cuando Baritone termine.
-     * Como Baritone no tiene callback fácil, usamos un contador y comprobamos
-     * si ya no está navegando.
-     */
-    private int esperaLlegadaBaritone = -1;
-    private double targetLlegadaX, targetLlegadaY, targetLlegadaZ;
-
-    private void programarLlegadaBaritone(double x, double y, double z) {
-        this.esperaLlegadaBaritone = 0;
-        this.targetLlegadaX = x;
-        this.targetLlegadaY = y;
-        this.targetLlegadaZ = z;
-    }
-
-    /**
-     * Comprueba si Baritone ha terminado de navegar.
-     * Se llama cada tick desde el método tick() principal.
-     */
-    private void comprobarLlegadaBaritone(Minecraft client, LocalPlayer player) {
-        if (esperaLlegadaBaritone < 0) return;
-
-        esperaLlegadaBaritone++;
-
-        // Comprobar si Baritone ya no está navegando O si estamos cerca del destino
-        double dx = targetLlegadaX - player.getX();
-        double dz = targetLlegadaZ - player.getZ();
-        double distancia = Math.sqrt(dx * dx + dz * dz);
-
-        if (!baritoneNavegando() || distancia < 2.0) {
-            debug("Baritone ha llegado o terminado. Distancia: " + distancia);
-            esperaLlegadaBaritone = -1;
-
-            // Determinar si era un cartel o autofarm
-            // (simplificado: asumimos que si hay cartelActual, es un cartel)
-            if (cartelActual != null) {
-                onLlegadaAlDestino((int) targetLlegadaX, (int) targetLlegadaY, (int) targetLlegadaZ);
-            } else {
-                onLlegadaAutofarm((int) targetLlegadaX, (int) targetLlegadaY, (int) targetLlegadaZ);
-            }
-        }
+        iniciarNavegacionBaritone(elegida.x, elegida.y, elegida.z);
     }
 
     private int contarItem(LocalPlayer player, Item item) {
